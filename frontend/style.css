@@ -1,0 +1,486 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: #f5f5f5;
+    color: #333;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Аутентификация */
+.screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.auth-container {
+    background: white;
+    padding: 40px;
+    border-radius: 10px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.1);
+    width: 400px;
+}
+
+.auth-container h1 {
+    text-align: center;
+    margin-bottom: 30px;
+    color: #2c3e50;
+}
+
+.auth-tabs {
+    display: flex;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #e0e0e0;
+}
+
+.tab-btn {
+    flex: 1;
+    padding: 10px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    color: #666;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+}
+
+.tab-btn.active {
+    color: #3498db;
+    border-bottom-color: #3498db;
+    font-weight: bold;
+}
+
+.auth-form {
+    display: none;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.auth-form.active {
+    display: flex;
+}
+
+.auth-form input, 
+.task-form input,
+.resource-form input,
+.resource-form select,
+.project-create input {
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    font-size: 14px;
+}
+
+.auth-form button,
+.task-form button,
+.resource-form button,
+.project-create button {
+    padding: 12px;
+    background: #3498db;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+    transition: background 0.3s;
+}
+
+.auth-form button:hover,
+.task-form button:hover,
+.resource-form button:hover,
+.project-create button:hover {
+    background: #2980b9;
+}
+
+.btn-secondary {
+    background: #95a5a6 !important;
+}
+
+.btn-secondary:hover {
+    background: #7f8c8d !important;
+}
+
+.message {
+    margin-top: 15px;
+    padding: 10px;
+    border-radius: 5px;
+    text-align: center;
+}
+
+.message.success {
+    background: #d4edda;
+    color: #155724;
+}
+
+.message.error {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+/* Основной экран */
+.main-header {
+    background: #2c3e50;
+    color: white;
+    padding: 15px 30px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.main-header h1 {
+    font-size: 24px;
+}
+
+.user-info {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.main-content {
+    display: flex;
+    height: calc(100vh - 70px);
+}
+
+/* Сайдбар проектов */
+.projects-sidebar {
+    width: 280px;
+    background: white;
+    border-right: 1px solid #e0e0e0;
+    padding: 20px;
+    overflow-y: auto;
+}
+
+.projects-sidebar h2 {
+    margin-bottom: 20px;
+    color: #2c3e50;
+}
+
+.project-create {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.project-create input {
+    flex: 1;
+}
+
+.projects-list {
+    list-style: none;
+}
+
+.projects-list li {
+    padding: 12px;
+    margin-bottom: 8px;
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 5px;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.projects-list li:hover {
+    background: #e9ecef;
+}
+
+.projects-list li.active {
+    background: #3498db;
+    color: white;
+    border-color: #3498db;
+}
+
+/* Рабочая область */
+.workspace {
+    flex: 1;
+    padding: 30px;
+    overflow-y: auto;
+}
+
+.no-project {
+    text-align: center;
+    padding: 100px 20px;
+    color: #95a5a6;
+    font-size: 18px;
+}
+
+.project-view h2 {
+    margin-bottom: 30px;
+    color: #2c3e50;
+}
+
+/* Вкладки */
+.tabs {
+    display: flex;
+    margin-bottom: 30px;
+    border-bottom: 2px solid #e0e0e0;
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Формы */
+.task-form,
+.resource-form {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    margin-bottom: 30px;
+}
+
+.task-form h3,
+.resource-form h3 {
+    margin-bottom: 20px;
+    color: #2c3e50;
+}
+
+.task-form {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+}
+
+.task-form .dependencies,
+.task-form .resources-assign {
+    grid-column: 1 / -1;
+}
+
+.dependencies label,
+.resources-assign label {
+    display: block;
+    margin-bottom: 10px;
+    font-weight: bold;
+    color: #555;
+}
+
+#task-dependencies,
+#task-resources {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 10px;
+    background: #f8f9fa;
+    border-radius: 5px;
+}
+
+#task-dependencies label,
+#task-resources label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-weight: normal;
+    font-size: 14px;
+}
+
+.resource-form {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr auto;
+    gap: 15px;
+    align-items: end;
+}
+
+/* Таблицы */
+.tasks-table-container,
+.resources-table-container {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    overflow-x: auto;
+}
+
+.tasks-table,
+.resources-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.tasks-table th,
+.tasks-table td,
+.resources-table th,
+.resources-table td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.tasks-table th,
+.resources-table th {
+    background: #f8f9fa;
+    font-weight: bold;
+    color: #555;
+}
+
+.tasks-table tr:hover,
+.resources-table tr:hover {
+    background: #f8f9fa;
+}
+
+.action-btn {
+    padding: 6px 12px;
+    margin-right: 5px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+}
+
+.edit-btn {
+    background: #f39c12;
+    color: white;
+}
+
+.delete-btn {
+    background: #e74c3c;
+    color: white;
+}
+
+/* План и диаграмма Ганта */
+.plan-controls {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 30px;
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+#calculate-plan-btn {
+    padding: 12px 24px;
+    background: #27ae60;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: bold;
+    transition: background 0.3s;
+}
+
+#calculate-plan-btn:hover {
+    background: #229954;
+}
+
+.plan-status {
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.plan-status.pending {
+    color: #f39c12;
+}
+
+.plan-status.calculating {
+    color: #f39c12;
+}
+
+.plan-status.done {
+    color: #27ae60;
+}
+
+.plan-status.error {
+    color: #e74c3c;
+}
+
+.gantt-chart {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    overflow-x: auto;
+    min-height: 300px;
+}
+
+.no-plan-message {
+    text-align: center;
+    padding: 50px;
+    color: #95a5a6;
+}
+
+.gantt-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+    height: 40px;
+}
+
+.gantt-task-name {
+    width: 150px;
+    font-size: 14px;
+    font-weight: bold;
+    padding-right: 10px;
+}
+
+.gantt-timeline {
+    flex: 1;
+    position: relative;
+    height: 30px;
+    background: #f0f0f0;
+    border-radius: 3px;
+}
+
+.gantt-bar {
+    position: absolute;
+    height: 30px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 0.3s;
+    min-width: 2px;
+}
+
+.gantt-bar:hover {
+    transform: scaleY(1.2);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+}
+
+.gantt-timeline-header {
+    display: flex;
+    margin-bottom: 20px;
+    padding-left: 150px;
+    position: relative;
+    height: 30px;
+    border-bottom: 1px solid #ddd;
+}
+
+.gantt-timeline-marker {
+    position: absolute;
+    font-size: 10px;
+    color: #666;
+    transform: translateX(-50%);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .main-content {
+        flex-direction: column;
+    }
+    
+    .projects-sidebar {
+        width: 100%;
+        height: auto;
+    }
+    
+    .task-form,
+    .resource-form {
+        grid-template-columns: 1fr;
+    }
+}

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Planner - Управление проектами</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Экран аутентификации -->
+    <div id="auth-screen" class="screen">
+        <div class="auth-container">
+            <h1>Project Planner</h1>
+            <div class="auth-tabs">
+                <button class="tab-btn active" data-tab="login">Вход</button>
+                <button class="tab-btn" data-tab="register">Регистрация</button>
+            </div>
+            <form id="login-form" class="auth-form active">
+                <input type="text" id="login-username" placeholder="Имя пользователя" required>
+                <input type="password" id="login-password" placeholder="Пароль" required>
+                <button type="submit">Войти</button>
+            </form>
+            <form id="register-form" class="auth-form">
+                <input type="text" id="register-username" placeholder="Имя пользователя" required>
+                <input type="password" id="register-password" placeholder="Пароль" required>
+                <button type="submit">Зарегистрироваться</button>
+            </form>
+            <div id="auth-message" class="message"></div>
+        </div>
+    </div>
+
+    <!-- Основной экран -->
+    <div id="main-screen" class="screen hidden">
+        <header class="main-header">
+            <h1>Project Planner</h1>
+            <div class="user-info">
+                <span id="current-user"></span>
+                <button id="logout-btn" class="btn-secondary">Выйти</button>
+            </div>
+        </header>
+        
+        <div class="main-content">
+            <!-- Список проектов -->
+            <aside class="projects-sidebar">
+                <h2>Проекты</h2>
+                <div class="project-create">
+                    <input type="text" id="new-project-name" placeholder="Название проекта">
+                    <button id="create-project-btn">Создать</button>
+                </div>
+                <ul id="projects-list" class="projects-list"></ul>
+            </aside>
+
+            <!-- Основная область -->
+            <main class="workspace" id="workspace">
+                <div id="no-project-selected" class="no-project">
+                    <p>Выберите проект или создайте новый</p>
+                </div>
+                
+                <div id="project-view" class="project-view hidden">
+                    <h2 id="project-name"></h2>
+                    
+                    <!-- Вкладки -->
+                    <div class="tabs">
+                        <button class="tab-btn active" data-tab="tasks">Задачи</button>
+                        <button class="tab-btn" data-tab="resources">Ресурсы</button>
+                        <button class="tab-btn" data-tab="plan">План</button>
+                    </div>
+                    
+                    <!-- Задачи -->
+                    <div id="tasks-tab" class="tab-content active">
+                        <div class="task-form">
+                            <h3>Добавить/Редактировать задачу</h3>
+                            <input type="text" id="task-name" placeholder="Название задачи">
+                            <input type="number" id="task-duration" placeholder="Длительность (мин)" min="1">
+                            <div class="dependencies">
+                                <label>Зависимости:</label>
+                                <div id="task-dependencies"></div>
+                            </div>
+                            <div class="resources-assign">
+                                <label>Ресурсы:</label>
+                                <div id="task-resources"></div>
+                            </div>
+                            <button id="save-task-btn">Сохранить задачу</button>
+                            <button id="cancel-task-edit" class="btn-secondary hidden">Отмена</button>
+                        </div>
+                        
+                        <div class="tasks-table-container">
+                            <table class="tasks-table">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Название</th>
+                                        <th>Длительность</th>
+                                        <th>Зависимости</th>
+                                        <th>Ресурсы</th>
+                                        <th>Действия</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tasks-list"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <!-- Ресурсы -->
+                    <div id="resources-tab" class="tab-content">
+                        <div class="resource-form">
+                            <h3>Добавить ресурс</h3>
+                            <input type="text" id="resource-name" placeholder="Название ресурса">
+                            <select id="resource-type">
+                                <option value="human">Человек</option>
+                                <option value="machine">Оборудование</option>
+                                <option value="material">Материал</option>
+                            </select>
+                            <input type="number" id="resource-availability" placeholder="Доступность" min="1">
+                            <button id="save-resource-btn">Сохранить ресурс</button>
+                        </div>
+                        
+                        <div class="resources-table-container">
+                            <table class="resources-table">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Название</th>
+                                        <th>Тип</th>
+                                        <th>Доступность</th>
+                                        <th>Действия</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="resources-list"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <!-- План -->
+                    <div id="plan-tab" class="tab-content">
+                        <div class="plan-controls">
+                            <button id="calculate-plan-btn">Пересчитать план</button>
+                            <div id="plan-status" class="plan-status">
+                                <span id="plan-status-text">Статус: нет плана</span>
+                            </div>
+                        </div>
+                        
+                        <div id="gantt-chart" class="gantt-chart">
+                            <p class="no-plan-message">Запустите расчет плана для отображения диаграммы Ганта</p>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
