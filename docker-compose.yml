@@ -3,15 +3,40 @@ version: '3.8'
 services:
   backend:
     build: ./backend
-    container_name: scheduler-backend
     ports:
       - "8000:8000"
-    environment:
-      - DATABASE_URL=sqlite:////data/app.db
-      - SECRET_KEY=dev-secret-key-change-in-production
     volumes:
-      - backend-data:/data
-    restart: unless-stopped
+      - ./backend:/app
+      - ./algorithm:/algorithm
+      - sqlite_data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///./data/project.db
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  celery-worker:
+    build: ./backend
+    volumes:
+      - ./backend:/app
+      - ./algorithm:/algorithm
+      - sqlite_data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///./data/project.db
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - backend
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=4
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
 
 volumes:
-  backend-data:
+  sqlite_data:
+  redis_data:

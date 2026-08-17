@@ -52,18 +52,18 @@ class TaskListResponse(BaseModel):
 class ResourceCreate(BaseModel):
     name: str
     type: str
-    availability: Dict[str, Any]
+    availability: int
 
 class ResourceUpdate(BaseModel):
     name: Optional[str] = None
     type: Optional[str] = None
-    availability: Optional[Dict[str, Any]] = None
+    availability: Optional[int] = None
 
 class ResourceResponse(BaseModel):
     id: int
     name: str
     type: str
-    availability: Dict[str, Any]
+    availability: int
 
 class ResourceListResponse(BaseModel):
     resources: List[ResourceResponse]
@@ -76,5 +76,5 @@ class PlanCalculateResponse(BaseModel):
 class PlanResponse(BaseModel):
     id: int
     status: str
-    data: Optional[Dict[str, Any]] = None
+    data: Optional[Any] = None
     created_at: datetime

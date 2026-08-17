@@ -8,7 +8,9 @@ class ProjectPlanner {
         this.resources = [];
         this.planData = null;
         this.pollingInterval = null;
-        this.apiBaseUrl = 'http://localhost:8000'; // Базовый URL для API
+        this.BASE_URL = 'http://localhost:8000';
+        this.isEditingResource = false;
+        this.editingResourceId = null;
         
         this.init();
     }
@@ -61,54 +63,54 @@ class ProjectPlanner {
 
         // Ресурсы
         document.getElementById('save-resource-btn').addEventListener('click', () => this.saveResource());
+        
+        // Добавляем обработчик для кнопки отмены редактирования ресурса
+        document.getElementById('cancel-resource-edit').addEventListener('click', () => this.cancelResourceEdit());
 
         // План
         document.getElementById('calculate-plan-btn').addEventListener('click', () => this.calculatePlan());
     }
 
-    // API запросы с полными URL
-    async apiRequest(endpoint, method = 'GET', body = null) {
-        const url = `${this.apiBaseUrl}${endpoint}`;
-        const headers = {
-            'Content-Type': 'application/json',
-        };
-
-        if (this.token) {
-            headers['Authorization'] = `Bearer ${this.token}`;
-        }
-
+    // API запросы
+    async apiRequest(url, method = 'GET', body = null) {
+        const fullUrl = url.startsWith('http') ? url : `${this.BASE_URL}${url}`;
+        
         const options = {
             method,
-            headers,
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.token || localStorage.getItem('token')}`
+            }
         };
-
+        
         if (body) {
             options.body = JSON.stringify(body);
         }
-
+        
         try {
-            console.log(`Making ${method} request to: ${url}`);
+            console.log(`Making ${method} request to: ${fullUrl}`);
             
-            const response = await fetch(url, options);
+            const response = await fetch(fullUrl, options);
             
             console.log('Response status:', response.status);
             
             if (!response.ok) {
-                const errorData = await response.json().catch(() => ({
-                    detail: `HTTP ${response.status}: ${response.statusText}`
-                }));
-                
-                console.error('API Error:', errorData);
-                throw new Error(errorData.detail || errorData.message || 'Ошибка запроса');
+                let errorMessage;
+                try {
+                    const errorData = await response.json();
+                    errorMessage = errorData.detail || errorData.message || `HTTP ${response.status}`;
+                } catch {
+                    errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+                }
+                throw new Error(errorMessage);
             }
-
+            
             const data = await response.json();
             console.log('Response data:', data);
             return data;
         } catch (error) {
             console.error('API Request Error:', error);
             
-            // Более понятные сообщения об ошибках
             if (error.name === 'TypeError' && error.message.includes('fetch')) {
                 throw new Error('Не удалось подключиться к серверу. Убедитесь, что backend запущен на http://localhost:8000');
             }
@@ -136,6 +138,20 @@ class ProjectPlanner {
     switchProjectTab(tab) {
         console.log('Switching project tab to:', tab);
         
+        // ✅ ПРИ ПЕРЕКЛЮЧЕНИИ НА ВКЛАДКУ ПЛАНА - ПРОВЕРЯЕМ АКТУАЛЬНОСТЬ
+        if (tab === 'plan') {
+            // Если план закеширован, но проект изменился - очищаем
+            if (this.planData && this.currentProject) {
+                // Проверяем, что план принадлежит текущему проекту
+                // (зависит от структуры planData)
+                if (this.planData.project_id && this.planData.project_id !== this.currentProject.id) {
+                    this.planData = null;
+                    document.getElementById('gantt-chart').innerHTML = '<p class="no-plan-message">Данные плана устарели. Пересчитайте план.</p>';
+                }
+            }
+        }
+        
+        // Остальной код
         document.querySelectorAll('.project-view .tabs .tab-btn').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.tab === tab);
         });
@@ -143,6 +159,10 @@ class ProjectPlanner {
         document.querySelectorAll('.tab-content').forEach(content => {
             content.classList.toggle('active', content.id === `${tab}-tab`);
         });
+        
+        if (tab === 'tasks') {
+            this.loadTaskFormData();
+        }
     }
 
     // Показ экранов
@@ -155,6 +175,8 @@ class ProjectPlanner {
         document.getElementById('auth-screen').classList.add('hidden');
         document.getElementById('main-screen').classList.remove('hidden');
         document.getElementById('current-user').textContent = this.currentUser || 'Пользователь';
+
+        
     }
 
     // Управление сообщениями
@@ -168,6 +190,38 @@ class ProjectPlanner {
         const messageEl = document.getElementById('auth-message');
         messageEl.textContent = text;
         messageEl.className = `message ${type}`;
+    }
+
+    showNotification(text, type = 'success') {
+        // Создаем уведомление
+        const notification = document.createElement('div');
+        notification.className = `notification notification-${type}`;
+        notification.textContent = text;
+        notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 5px;
+            color: white;
+            font-weight: bold;
+            z-index: 9999;
+            animation: slideIn 0.3s ease;
+            ${type === 'success' ? 'background: #27ae60;' : 'background: #e74c3c;'}
+        `;
+        
+        document.body.appendChild(notification);
+        
+        // Удаляем через 3 секунды
+        setTimeout(() => {
+            notification.style.animation = 'slideOut 0.3s ease';
+            setTimeout(() => notification.remove(), 300);
+        }, 3000);
+    }
+
+    showError(message) {
+        console.error('Error:', message);
+        this.showNotification(message, 'error');
     }
 
     // Аутентификация
@@ -191,6 +245,7 @@ class ProjectPlanner {
             localStorage.setItem('currentUser', this.currentUser);
             
             this.showMainScreen();
+            this.clearPlanCache(); 
             this.loadProjects();
         } catch (error) {
             console.error('Login error:', error);
@@ -230,6 +285,7 @@ class ProjectPlanner {
                 
                 setTimeout(() => {
                     this.showMainScreen();
+                    this.clearPlanCache(); 
                     this.loadProjects();
                 }, 1000);
             } else {
@@ -242,15 +298,26 @@ class ProjectPlanner {
     }
 
     logout() {
+        // Очищаем все состояние
         this.token = null;
         this.currentUser = null;
         this.currentProject = null;
         this.tasks = [];
         this.resources = [];
         this.planData = null;
+        this.currentTask = null;
+        this.isEditingResource = false;
+        this.editingResourceId = null;
         
+        this.stopPolling();
+        this.clearPlanCache(); 
+        
+        // Очищаем localStorage
         localStorage.removeItem('token');
         localStorage.removeItem('currentUser');
+        
+        // Очищаем все UI элементы
+        this.clearAllUI();
         
         this.showAuthScreen();
         
@@ -259,8 +326,35 @@ class ProjectPlanner {
         this.clearAuthMessage();
     }
 
+    // ДОБАВЬТЕ ЭТОТ МЕТОД:
+    clearAllUI() {
+        // Очищаем диаграмму Ганта
+        const ganttChart = document.getElementById('gantt-chart');
+        if (ganttChart) {
+            ganttChart.innerHTML = '<p class="no-plan-message">Запустите расчет плана для отображения диаграммы Ганта</p>';
+        }
+        
+        // Очищаем статус плана
+        const statusEl = document.getElementById('plan-status');
+        const statusText = document.getElementById('plan-status-text');
+        if (statusEl && statusText) {
+            statusEl.className = 'plan-status';
+            statusText.textContent = 'Статус: нет плана';
+        }
+        
+        // Очищаем списки
+        document.getElementById('tasks-list').innerHTML = '';
+        document.getElementById('resources-list').innerHTML = '';
+        document.getElementById('projects-list').innerHTML = '';
+        
+        // Скрываем проект
+        document.getElementById('no-project-selected').classList.remove('hidden');
+        document.getElementById('project-view').classList.add('hidden');
+    }
+
     // Проекты
     async loadProjects() {
+        this.clearPlanCache();
         try {
             const response = await this.apiRequest('/api/projects');
             const projects = response.projects || [];
@@ -292,7 +386,7 @@ class ProjectPlanner {
         const name = document.getElementById('new-project-name').value.trim();
         
         if (!name) {
-            alert('Введите название проекта');
+            this.showNotification('Введите название проекта', 'error');
             return;
         }
 
@@ -301,14 +395,29 @@ class ProjectPlanner {
             document.getElementById('new-project-name').value = '';
             await this.loadProjects();
             await this.selectProject(project);
+            this.showNotification('Проект создан', 'success');
         } catch (error) {
-            alert(error.message);
+            this.showError(error.message);
         }
     }
 
     async selectProject(project) {
-        this.currentProject = project;
+        // ✅ ОЧИЩАЕМ СТАРЫЕ ДАННЫЕ ПЕРЕД ЗАГРУЗКОЙ НОВОГО ПРОЕКТА
+        this.currentProject = null;
         this.currentTask = null;
+        this.planData = null;  // ← КРИТИЧЕСКИ ВАЖНО!
+        this.tasks = [];
+        this.resources = [];
+        
+        this.stopPolling();
+        
+        // Очищаем UI
+        document.getElementById('gantt-chart').innerHTML = '<p class="no-plan-message">Запустите расчет плана для отображения диаграммы Ганта</p>';
+        document.getElementById('plan-status').className = 'plan-status';
+        document.getElementById('plan-status-text').textContent = 'Статус: нет плана';
+        
+        // Теперь устанавливаем новый проект
+        this.currentProject = project;
         
         document.getElementById('no-project-selected').classList.add('hidden');
         document.getElementById('project-view').classList.remove('hidden');
@@ -318,11 +427,40 @@ class ProjectPlanner {
             li.classList.toggle('active', li.dataset.projectId == project.id);
         });
         
+        // Загружаем данные для нового проекта
         await Promise.all([
             this.loadTasks(),
             this.loadResources(),
-            this.loadLatestPlan()
+            //this.loadLatestPlan()
         ]);
+        
+        this.loadTaskFormData();
+    }
+
+    // Загрузка данных для формы задачи (Баг 1)
+    async loadTaskFormData() {
+        if (!this.currentProject) return;
+        
+        try {
+            // Загружаем задачи для зависимостей
+            const tasksResponse = await this.apiRequest(`/api/projects/${this.currentProject.id}/tasks`);
+            this.tasks = tasksResponse.tasks || [];
+            
+            // Загружаем ресурсы
+            const resourcesResponse = await this.apiRequest(`/api/projects/${this.currentProject.id}/resources`);
+            this.resources = resourcesResponse.resources || [];
+            
+            // Отображаем чекбоксы
+            this.renderDependencyCheckboxes();
+            this.renderResourceCheckboxes();
+            
+            console.log('Task form data loaded:', {
+                tasks: this.tasks.length,
+                resources: this.resources.length
+            });
+        } catch (error) {
+            console.error('Error loading task form data:', error);
+        }
     }
 
     // Задачи
@@ -333,8 +471,8 @@ class ProjectPlanner {
             const response = await this.apiRequest(`/api/projects/${this.currentProject.id}/tasks`);
             this.tasks = response.tasks || [];
             this.renderTasks();
-            this.renderDependenciesCheckboxes();
-            this.renderResourcesCheckboxes();
+            this.renderDependencyCheckboxes();
+            this.renderResourceCheckboxes();
         } catch (error) {
             console.error('Ошибка загрузки задач:', error);
         }
@@ -343,6 +481,11 @@ class ProjectPlanner {
     renderTasks() {
         const tasksList = document.getElementById('tasks-list');
         tasksList.innerHTML = '';
+        
+        if (this.tasks.length === 0) {
+            tasksList.innerHTML = '<tr><td colspan="6" style="text-align: center;">Нет задач. Создайте первую задачу.</td></tr>';
+            return;
+        }
         
         this.tasks.forEach(task => {
             const tr = document.createElement('tr');
@@ -373,14 +516,29 @@ class ProjectPlanner {
         });
     }
 
-    renderDependenciesCheckboxes() {
+    renderDependencyCheckboxes() {
         const depsContainer = document.getElementById('task-dependencies');
         depsContainer.innerHTML = '';
         
-        this.tasks.forEach(task => {
-            if (this.currentTask && task.id === this.currentTask.id) return;
-            
+        if (this.tasks.length === 0) {
+            depsContainer.innerHTML = '<p class="hint-text">Сначала создайте задачи</p>';
+            return;
+        }
+        
+        // Фильтруем текущую задачу при редактировании
+        const availableTasks = this.currentTask 
+            ? this.tasks.filter(task => task.id !== this.currentTask.id)
+            : this.tasks;
+        
+        if (availableTasks.length === 0) {
+            depsContainer.innerHTML = '<p class="hint-text">Нет доступных задач для зависимостей</p>';
+            return;
+        }
+        
+        availableTasks.forEach(task => {
             const label = document.createElement('label');
+            label.className = 'checkbox-label';
+            
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.value = task.id;
@@ -391,17 +549,24 @@ class ProjectPlanner {
             }
             
             label.appendChild(checkbox);
-            label.appendChild(document.createTextNode(task.name));
+            label.appendChild(document.createTextNode(`${task.name} (ID: ${task.id})`));
             depsContainer.appendChild(label);
         });
     }
 
-    renderResourcesCheckboxes() {
+    renderResourceCheckboxes() {
         const resourcesContainer = document.getElementById('task-resources');
         resourcesContainer.innerHTML = '';
         
+        if (this.resources.length === 0) {
+            resourcesContainer.innerHTML = '<p class="hint-text">Сначала создайте ресурсы</p>';
+            return;
+        }
+        
         this.resources.forEach(resource => {
             const label = document.createElement('label');
+            label.className = 'checkbox-label';
+            
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.value = resource.id;
@@ -412,7 +577,7 @@ class ProjectPlanner {
             }
             
             label.appendChild(checkbox);
-            label.appendChild(document.createTextNode(resource.name));
+            label.appendChild(document.createTextNode(`${resource.name} (${resource.type})`));
             resourcesContainer.appendChild(label);
         });
     }
@@ -422,7 +587,7 @@ class ProjectPlanner {
         const duration = parseInt(document.getElementById('task-duration').value);
         
         if (!name || !duration) {
-            alert('Заполните название и длительность задачи');
+            this.showNotification('Заполните название и длительность задачи', 'error');
             return;
         }
         
@@ -442,22 +607,33 @@ class ProjectPlanner {
         try {
             if (this.currentTask) {
                 await this.apiRequest(
-                    `/api/projects/${this.currentProject.id}/tasks/${this.currentTask.id}`,
+                    `/api/tasks/${this.currentTask.id}`,
                     'PUT',
                     taskData
                 );
+                this.showNotification('Задача обновлена', 'success');
             } else {
                 await this.apiRequest(
                     `/api/projects/${this.currentProject.id}/tasks`,
                     'POST',
                     taskData
                 );
+                this.showNotification('Задача создана', 'success');
             }
-            
-            this.cancelTaskEdit();
+
+            this.currentTask = null;
+            document.getElementById('task-name').value = '';
+            document.getElementById('task-duration').value = '';
+            document.getElementById('cancel-task-edit').classList.add('hidden');
+            document.getElementById('save-task-btn').textContent = 'Сохранить задачу';
+
             await this.loadTasks();
+            this.loadTaskFormData();
+        
+            
+            
         } catch (error) {
-            alert(error.message);
+            this.showError(error.message);
         }
     }
 
@@ -470,8 +646,8 @@ class ProjectPlanner {
         document.getElementById('cancel-task-edit').classList.remove('hidden');
         document.getElementById('save-task-btn').textContent = 'Обновить задачу';
         
-        this.renderDependenciesCheckboxes();
-        this.renderResourcesCheckboxes();
+        this.renderDependencyCheckboxes();
+        this.renderResourceCheckboxes();
     }
 
     cancelTaskEdit() {
@@ -480,8 +656,8 @@ class ProjectPlanner {
         document.getElementById('task-duration').value = '';
         document.getElementById('cancel-task-edit').classList.add('hidden');
         document.getElementById('save-task-btn').textContent = 'Сохранить задачу';
-        this.renderDependenciesCheckboxes();
-        this.renderResourcesCheckboxes();
+        this.renderDependencyCheckboxes();
+        this.renderResourceCheckboxes();
     }
 
     async deleteTask(taskId) {
@@ -489,12 +665,14 @@ class ProjectPlanner {
         
         try {
             await this.apiRequest(
-                `/api/projects/${this.currentProject.id}/tasks/${taskId}`,
+                `/api/tasks/${taskId}`,
                 'DELETE'
             );
+            this.showNotification('Задача удалена', 'success');
             await this.loadTasks();
+            this.loadTaskFormData();
         } catch (error) {
-            alert(error.message);
+            this.showError(error.message);
         }
     }
 
@@ -506,7 +684,7 @@ class ProjectPlanner {
             const response = await this.apiRequest(`/api/projects/${this.currentProject.id}/resources`);
             this.resources = response.resources || [];
             this.renderResources();
-            this.renderResourcesCheckboxes();
+            this.renderResourceCheckboxes();
         } catch (error) {
             console.error('Ошибка загрузки ресурсов:', error);
         }
@@ -515,6 +693,11 @@ class ProjectPlanner {
     renderResources() {
         const resourcesList = document.getElementById('resources-list');
         resourcesList.innerHTML = '';
+        
+        if (this.resources.length === 0) {
+            resourcesList.innerHTML = '<tr><td colspan="5" style="text-align: center;">Нет ресурсов. Создайте первый ресурс.</td></tr>';
+            return;
+        }
         
         this.resources.forEach(resource => {
             const tr = document.createElement('tr');
@@ -540,31 +723,78 @@ class ProjectPlanner {
         const availability = parseInt(document.getElementById('resource-availability').value);
         
         if (!name || !availability) {
-            alert('Заполните название и доступность ресурса');
+            this.showNotification('Заполните название и доступность ресурса', 'error');
             return;
         }
         
+        const resourceData = {
+            name,
+            type,
+            availability
+        };
+        
         try {
-            await this.apiRequest(
-                `/api/projects/${this.currentProject.id}/resources`,
-                'POST',
-                { name, type, availability }
-            );
+            if (this.isEditingResource && this.editingResourceId) {
+                // Редактирование существующего ресурса
+                await this.apiRequest(
+                    `/api/resources/${this.editingResourceId}`,
+                    'PUT',
+                    resourceData
+                );
+                this.showNotification('Ресурс обновлен', 'success');
+            } else {
+                // Создание нового ресурса
+                await this.apiRequest(
+                    `/api/projects/${this.currentProject.id}/resources`,
+                    'POST',
+                    resourceData
+                );
+                this.showNotification('Ресурс сохранён', 'success');
+            }
             
-            document.getElementById('resource-name').value = '';
-            document.getElementById('resource-availability').value = '';
+            // Очищаем форму
+            this.cancelResourceEdit();
             
+            // Обновляем список ресурсов
             await this.loadResources();
+            
+            // Обновляем чекбоксы в форме задачи
+            this.renderResourceCheckboxes();
+            this.loadTaskFormData();
+
+            
+            console.log('Resource saved successfully');
         } catch (error) {
-            alert(error.message);
+            console.error('Error saving resource:', error);
+            this.showError(`Ошибка при сохранении ресурса: ${error.message}`);
         }
     }
 
     editResource(resourceId) {
         const resource = this.resources.find(r => r.id === resourceId);
+        if (!resource) return;
+        
         document.getElementById('resource-name').value = resource.name;
         document.getElementById('resource-type').value = resource.type;
         document.getElementById('resource-availability').value = resource.availability;
+        
+        this.isEditingResource = true;
+        this.editingResourceId = resourceId;
+        
+        document.getElementById('save-resource-btn').textContent = 'Обновить ресурс';
+        document.getElementById('cancel-resource-edit').classList.remove('hidden');
+    }
+
+    cancelResourceEdit() {
+        this.isEditingResource = false;
+        this.editingResourceId = null;
+        
+        document.getElementById('resource-name').value = '';
+        document.getElementById('resource-type').value = 'human';
+        document.getElementById('resource-availability').value = '';
+        
+        document.getElementById('save-resource-btn').textContent = 'Сохранить ресурс';
+        document.getElementById('cancel-resource-edit').classList.add('hidden');
     }
 
     async deleteResource(resourceId) {
@@ -572,12 +802,14 @@ class ProjectPlanner {
         
         try {
             await this.apiRequest(
-                `/api/projects/${this.currentProject.id}/resources/${resourceId}`,
+                `/api/resources/${resourceId}`,
                 'DELETE'
             );
+            this.showNotification('Ресурс удален', 'success');
             await this.loadResources();
+            this.renderResourceCheckboxes();
         } catch (error) {
-            alert(error.message);
+            this.showError(error.message);
         }
     }
 
@@ -586,35 +818,105 @@ class ProjectPlanner {
         if (!this.currentProject) return;
         
         try {
+            this.updatePlanStatus('pending');
+            
             const response = await this.apiRequest(
                 `/api/projects/${this.currentProject.id}/plan/calculate`,
                 'POST'
             );
             
-            this.updatePlanStatus(response.status);
+            console.log('Plan calculation started:', response);
+            
+            // Запускаем polling для отслеживания статуса
             this.startPolling();
         } catch (error) {
+            console.error('Error calculating plan:', error);
             this.updatePlanStatus('error', error.message);
         }
     }
 
     startPolling() {
         this.stopPolling();
-        this.pollingInterval = setInterval(() => this.loadLatestPlan(), 2000);
+        console.log('Starting polling for plan status...');
+        
+        // Немедленно проверяем статус
+        this.pollPlanStatus();
+        
+        // Запускаем периодический опрос
+        this.pollingInterval = setInterval(() => {
+            this.pollPlanStatus();
+        }, 2000);
     }
 
     stopPolling() {
         if (this.pollingInterval) {
             clearInterval(this.pollingInterval);
             this.pollingInterval = null;
+            console.log('Polling stopped');
+        }
+    }
+
+    async pollPlanStatus() {
+        if (!this.currentProject) {
+            this.stopPolling();
+            return;
+        }
+        
+        try {
+            const plan = await this.apiRequest(`/api/projects/${this.currentProject.id}/plan/latest`);
+            
+            // ✅ ПРОВЕРЯЕМ, ЧТО ПЛАН ПРИНАДЛЕЖИТ ТЕКУЩЕМУ ПРОЕКТУ
+            if (plan && plan.project_id && plan.project_id !== this.currentProject.id) {
+                console.warn('Plan project mismatch:', plan.project_id, 'vs', this.currentProject.id);
+                this.planData = null;
+                this.updatePlanStatus('error', 'Несоответствие данных');
+                this.stopPolling();
+                return;
+            }
+            
+            this.updatePlanStatus(plan.status);
+            
+            if (plan.status === 'done' && plan.data) {
+                this.stopPolling();
+                this.planData = plan.data;
+                this.renderGanttChart(plan.data);
+                this.updatePlanStatus('done');
+                this.showNotification('План рассчитан', 'success');
+            } else if (plan.status === 'error') {
+                this.stopPolling();
+                this.updatePlanStatus('error', plan.data?.error || 'Ошибка расчета плана');
+                this.showError(plan.data?.error || 'Ошибка расчета плана');
+            }
+        } catch (error) {
+            console.error('Error polling plan status:', error);
         }
     }
 
     async loadLatestPlan() {
-        if (!this.currentProject) return;
+        if (!this.currentProject) {
+            console.warn('No current project selected');
+            return;
+        }
+        
+        // ✅ ОЧИЩАЕМ СТАРЫЙ ПЛАН ПЕРЕД ЗАГРУЗКОЙ
+        this.planData = null;
+        const ganttChart = document.getElementById('gantt-chart');
+        if (ganttChart) {
+            ganttChart.innerHTML = '<p class="no-plan-message">Загрузка плана...</p>';
+        }
         
         try {
             const response = await this.apiRequest(`/api/projects/${this.currentProject.id}/plan/latest`);
+            
+            // ✅ ПРОВЕРКА ПРИНАДЛЕЖНОСТИ ПЛАНА
+            if (response && response.project_id && response.project_id !== this.currentProject.id) {
+                console.warn('⚠️ Plan project mismatch:', response.project_id, 'vs', this.currentProject.id);
+                this.updatePlanStatus('error', 'Несоответствие данных');
+                if (ganttChart) {
+                    ganttChart.innerHTML = '<p class="no-plan-message" style="color: #e74c3c;">⚠️ Ошибка: данные плана принадлежат другому проекту</p>';
+                }
+                return;
+            }
             
             this.updatePlanStatus(response.status);
             
@@ -622,96 +924,247 @@ class ProjectPlanner {
                 this.stopPolling();
                 this.planData = response.data;
                 this.renderGanttChart(response.data);
+                this.updatePlanStatus('done');
             } else if (response.status === 'error') {
                 this.stopPolling();
                 this.updatePlanStatus('error', response.message || 'Ошибка расчета плана');
+                if (ganttChart) {
+                    ganttChart.innerHTML = `<p class="no-plan-message" style="color: #e74c3c;">⚠️ ${response.message || 'Ошибка расчета плана'}</p>`;
+                }
+            } else if (response.status === 'pending' || response.status === 'calculating') {
+                this.startPolling();
             }
         } catch (error) {
-            this.stopPolling();
-            this.updatePlanStatus('error', error.message);
+            console.error('Error loading latest plan:', error);
+            // Если план не найден (404) - это нормально
+            if (error.message && error.message.includes('404')) {
+                if (ganttChart) {
+                    ganttChart.innerHTML = '<p class="no-plan-message">План не рассчитан. Нажмите "Пересчитать план"</p>';
+                }
+                this.updatePlanStatus('pending', 'Нет плана');
+            } else {
+                if (ganttChart) {
+                    ganttChart.innerHTML = `<p class="no-plan-message" style="color: #e74c3c;">⚠️ Ошибка загрузки плана: ${error.message}</p>`;
+                }
+                this.updatePlanStatus('error', error.message);
+            }
         }
     }
+
 
     updatePlanStatus(status, message = '') {
         const statusEl = document.getElementById('plan-status');
         const statusText = document.getElementById('plan-status-text');
         
+        if (!statusEl || !statusText) {
+            console.warn('Plan status elements not found');
+            return;
+        }
+        
         statusEl.className = `plan-status ${status}`;
         
         const statusMessages = {
-            pending: 'Статус: ожидание',
-            calculating: 'Статус: расчет...',
-            done: 'Статус: готово',
-            error: `Статус: ошибка - ${message}`
+            pending: 'Ожидание',
+            calculating: 'Расчёт...',
+            done: 'Готово',
+            error: 'Ошибка'
         };
         
-        statusText.textContent = statusMessages[status] || `Статус: ${status}`;
+        const statusMessage = statusMessages[status] || status;
+        statusText.textContent = `Статус: ${statusMessage}${message ? ` - ${message}` : ''}`;
+        
+        console.log('Plan status updated:', status, message);
     }
+
 
     renderGanttChart(planData) {
         const ganttChart = document.getElementById('gantt-chart');
         ganttChart.innerHTML = '';
         
-        if (!planData.tasks || planData.tasks.length === 0) {
+        if (!planData || !planData.tasks || planData.tasks.length === 0) {
             ganttChart.innerHTML = '<p class="no-plan-message">Нет данных для отображения</p>';
             return;
         }
         
-        const maxTime = Math.max(...planData.tasks.map(task => task.end_time));
-        const minTime = Math.min(...planData.tasks.map(task => task.start_time));
-        const timeRange = maxTime - minTime || 1;
+        const validTasks = planData.tasks.filter(pt => 
+            this.tasks.some(t => t.id === pt.task_id)
+        );
         
-        // Заголовок временной шкалы
+        if (validTasks.length === 0) {
+            ganttChart.innerHTML = '<p class="no-plan-message">Нет задач для отображения</p>';
+            return;
+        }
+        
+        let minTime = Math.min(...validTasks.map(t => t.start_time));
+        let maxTime = Math.max(...validTasks.map(t => t.end_time));
+        
+        if (maxTime === minTime) maxTime = minTime + 60;
+        
+        const timeRange = maxTime - minTime;
+        const LABEL_WIDTH = 200;
+        const hourStep = 60;
+        const numHours = Math.ceil(timeRange / hourStep);
+        
+        // Контейнер
+        const ganttContainer = document.createElement('div');
+        ganttContainer.style.cssText = `
+            position: relative;
+            padding-left: ${LABEL_WIDTH}px;
+        `;
+        
+        // Заголовок шкалы
         const timelineHeader = document.createElement('div');
-        timelineHeader.className = 'gantt-timeline-header';
+        timelineHeader.style.cssText = `
+            position: relative;
+            height: 30px;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 10px;
+        `;
         
-        const numMarkers = Math.min(10, Math.ceil(timeRange / 60));
-        for (let i = 0; i <= numMarkers; i++) {
-            const time = minTime + (timeRange * i / numMarkers);
-            const position = 150 + ((time - minTime) / timeRange) * 500;
+        // Вертикальные направляющие в заголовке
+        for (let hour = 0; hour <= numHours; hour++) {
+            const time = minTime + hour * hourStep;
+            const leftPercent = ((time - minTime) / timeRange) * 100;
             
+            // Вертикальная линия
+            const guideLine = document.createElement('div');
+            guideLine.style.cssText = `
+                position: absolute;
+                left: ${leftPercent}%;
+                top: 0;
+                bottom: 0;
+                width: 1px;
+                background: ${hour === 0 ? '#ccc' : '#e0e0e0'};
+            `;
+            timelineHeader.appendChild(guideLine);
+            
+            // Подпись времени
             const marker = document.createElement('span');
-            marker.className = 'gantt-timeline-marker';
-            marker.style.left = `${position}px`;
-            marker.textContent = `${Math.round(time / 60)}ч`;
+            marker.style.cssText = `
+                position: absolute;
+                left: ${leftPercent}%;
+                top: 5px;
+                transform: translateX(-50%);
+                font-size: 11px;
+                color: #666;
+                white-space: nowrap;
+            `;
+            
+            const hours = Math.floor(time / 60);
+            const minutes = Math.round(time % 60);
+            marker.textContent = minutes > 0 ? `${hours}ч ${minutes}м` : `${hours}ч`;
+            
             timelineHeader.appendChild(marker);
         }
         
-        ganttChart.appendChild(timelineHeader);
+        ganttContainer.appendChild(timelineHeader);
         
-        // Задачи
-        planData.tasks.forEach(planTask => {
+        // Полоски задач
+        validTasks.forEach(planTask => {
             const task = this.tasks.find(t => t.id === planTask.task_id);
-            if (!task) return;
             
             const row = document.createElement('div');
-            row.className = 'gantt-row';
+            row.style.cssText = `
+                display: flex;
+                align-items: center;
+                height: 40px;
+                margin-bottom: 5px;
+                position: relative;
+            `;
             
             const taskName = document.createElement('div');
-            taskName.className = 'gantt-task-name';
+            taskName.style.cssText = `
+                position: absolute;
+                left: -${LABEL_WIDTH}px;
+                width: ${LABEL_WIDTH - 10}px;
+                font-size: 13px;
+                font-weight: bold;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                text-align: right;
+                padding-right: 10px;
+            `;
             taskName.textContent = task.name;
+            taskName.title = task.name;
             
             const timeline = document.createElement('div');
-            timeline.className = 'gantt-timeline';
+            timeline.style.cssText = `
+                position: relative;
+                flex: 1;
+                height: 30px;
+                background: #f5f5f5;
+                border-radius: 4px;
+                overflow: visible;
+            `;
             
+            // Вертикальные направляющие в таймлайне
+            for (let hour = 0; hour <= numHours; hour++) {
+                const time = minTime + hour * hourStep;
+                const leftPercent = ((time - minTime) / timeRange) * 100;
+                
+                const guideLine = document.createElement('div');
+                guideLine.style.cssText = `
+                    position: absolute;
+                    left: ${leftPercent}%;
+                    top: -10px;
+                    bottom: -10px;
+                    width: 1px;
+                    background: #e8e8e8;
+                    z-index: 1;
+                `;
+                timeline.appendChild(guideLine);
+            }
+            
+            // Полоска задачи
             const bar = document.createElement('div');
-            bar.className = 'gantt-bar';
-            
             const startPercent = ((planTask.start_time - minTime) / timeRange) * 100;
             const widthPercent = ((planTask.end_time - planTask.start_time) / timeRange) * 100;
             
-            bar.style.left = `${startPercent}%`;
-            bar.style.width = `${widthPercent}%`;
-            bar.title = `${task.name}: ${planTask.start_time}-${planTask.end_time} мин`;
+            const durationMinutes = planTask.end_time - planTask.start_time;
+            const durationHours = durationMinutes / 60;
+            
+            bar.style.cssText = `
+                position: absolute;
+                left: ${startPercent}%;
+                width: ${Math.max(0.5, widthPercent)}%;
+                height: 100%;
+                background: linear-gradient(135deg, #667eea, #764ba2);
+                border-radius: 4px;
+                cursor: pointer;
+                transition: all 0.2s;
+                z-index: 2;
+            `;
+            
+            bar.title = `${task.name}\nНачало: ${Math.floor(planTask.start_time/60)}ч ${Math.round(planTask.start_time%60)}м\nКонец: ${Math.floor(planTask.end_time/60)}ч ${Math.round(planTask.end_time%60)}м\nДлительность: ${durationMinutes} мин (${durationHours.toFixed(1)} ч)`;
             
             timeline.appendChild(bar);
             row.appendChild(taskName);
             row.appendChild(timeline);
-            ganttChart.appendChild(row);
+            ganttContainer.appendChild(row);
         });
+        
+        ganttChart.appendChild(ganttContainer);
+    }
+
+    clearPlanCache() {
+        this.planData = null;
+        this.stopPolling();
+        
+        const ganttChart = document.getElementById('gantt-chart');
+        if (ganttChart) {
+            ganttChart.innerHTML = '<p class="no-plan-message">Запустите расчет плана для отображения диаграммы Ганта</p>';
+        }
+        
+        const statusEl = document.getElementById('plan-status');
+        const statusText = document.getElementById('plan-status-text');
+        if (statusEl && statusText) {
+            statusEl.className = 'plan-status';
+            statusText.textContent = 'Статус: нет плана';
+        }
     }
 }
 
 // Создание экземпляра приложения
 const app = new ProjectPlanner();
-window.app = app; // Делаем доступным глобально для onclick обработчиков
+window.app = app;

@@ -1,18 +1,16 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
-from typing import List
-from datetime import datetime
+from sqlalchemy.orm import Session
+import logging
 import os
 
 from . import models, schemas, auth
+from .database import engine, SessionLocal
 from .planner import run_planning_algorithm
 
-# Database setup
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./project.db")
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Logging configuration
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -35,6 +33,38 @@ def get_db():
     finally:
         db.close()
 
+def trigger_auto_recalc(project_id: int, db: Session):
+    """
+    Automatically trigger plan recalculation when tasks or resources change.
+    """
+    # Find the latest completed plan
+    latest_plan = db.query(models.Plan).filter(
+        models.Plan.project_id == project_id,
+        models.Plan.status == "done"
+    ).order_by(models.Plan.created_at.desc()).first()
+    
+    if latest_plan:
+        logger.info(f"Auto-recalculating plan for project {project_id}")
+        
+        # Create new plan with pending status
+        new_plan = models.Plan(
+            project_id=project_id,
+            status="pending",
+            data=None
+        )
+        db.add(new_plan)
+        db.commit()
+        db.refresh(new_plan)
+        
+        # Trigger Celery task
+        from .tasks import calculate_plan_task
+        task = calculate_plan_task.delay(new_plan.id)
+        logger.info(f"Auto-recalculation task {task.id} started")
+        
+        return new_plan.id
+    
+    return None
+
 # Auth endpoints
 @app.post("/api/auth/register", response_model=schemas.TokenResponse)
 def register(user: schemas.UserRegister, db: Session = Depends(get_db)):
@@ -55,6 +85,7 @@ def register(user: schemas.UserRegister, db: Session = Depends(get_db)):
         data={"sub": str(db_user.id), "username": db_user.username}
     )
     return {"token": token}
+
 
 @app.post("/api/auth/login", response_model=schemas.TokenResponse)
 def login(user: schemas.UserLogin, db: Session = Depends(get_db)):
@@ -137,7 +168,6 @@ def create_task(
     
     # Add dependencies
     for dep_id in task.dependencies:
-        # Verify dependency exists and belongs to same project
         dep_task = db.query(models.Task).filter(
             models.Task.id == dep_id,
             models.Task.project_id == project_id
@@ -164,6 +194,9 @@ def create_task(
     db.commit()
     db.refresh(db_task)
     
+    # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ СОЗДАНИЯ ЗАДАЧИ
+    trigger_auto_recalc(project_id, db)
+    
     return {
         "id": db_task.id,
         "name": db_task.name,
@@ -178,7 +211,6 @@ def list_tasks(
     current_user: dict = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify project ownership
     project = db.query(models.Project).filter(
         models.Project.id == project_id,
         models.Project.user_id == current_user["id"]
@@ -190,9 +222,7 @@ def list_tasks(
     
     result = []
     for task in tasks:
-        # Get dependencies
         dependencies = [d.depends_on_task_id for d in task.dependencies]
-        # Get resources
         resource_ids = [r.id for r in task.resources]
         
         result.append({
@@ -228,18 +258,8 @@ def update_task(
     
     # Update dependencies
     if task_update.dependencies is not None:
-        # Remove old dependencies
         db.query(models.Dependency).filter(models.Dependency.task_id == task_id).delete()
-        
-        # Add new dependencies
         for dep_id in task_update.dependencies:
-            dep_task = db.query(models.Task).filter(
-                models.Task.id == dep_id,
-                models.Task.project_id == task.project_id
-            ).first()
-            if not dep_task:
-                raise HTTPException(status_code=400, detail=f"Dependency task {dep_id} not found")
-            
             db_dependency = models.Dependency(
                 task_id=task_id,
                 depends_on_task_id=dep_id
@@ -254,14 +274,15 @@ def update_task(
                 models.Resource.id == resource_id,
                 models.Resource.project_id == task.project_id
             ).first()
-            if not resource:
-                raise HTTPException(status_code=400, detail=f"Resource {resource_id} not found")
-            task.resources.append(resource)
+            if resource:
+                task.resources.append(resource)
     
     db.commit()
     db.refresh(task)
     
-    # Get updated dependencies and resources
+    # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ ОБНОВЛЕНИЯ ЗАДАЧИ
+    trigger_auto_recalc(task.project_id, db)
+    
     dependencies = [d.depends_on_task_id for d in task.dependencies]
     resource_ids = [r.id for r in task.resources]
     
@@ -279,6 +300,7 @@ def delete_task(
     current_user: dict = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Get task with project_id
     task = db.query(models.Task).join(models.Project).filter(
         models.Task.id == task_id,
         models.Project.user_id == current_user["id"]
@@ -286,8 +308,14 @@ def delete_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     
+    project_id = task.project_id
+    
     db.delete(task)
     db.commit()
+    
+    # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ УДАЛЕНИЯ ЗАДАЧИ
+    trigger_auto_recalc(project_id, db)
+    
     return {"message": "Task deleted successfully"}
 
 # Resource endpoints
@@ -316,6 +344,9 @@ def create_resource(
     db.commit()
     db.refresh(db_resource)
     
+    # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ СОЗДАНИЯ РЕСУРСА
+    trigger_auto_recalc(project_id, db)
+    
     return {
         "id": db_resource.id,
         "name": db_resource.name,
@@ -329,7 +360,6 @@ def list_resources(
     current_user: dict = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify project ownership
     project = db.query(models.Project).filter(
         models.Project.id == project_id,
         models.Project.user_id == current_user["id"]
@@ -377,6 +407,9 @@ def update_resource(
     db.commit()
     db.refresh(resource)
     
+    # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ ОБНОВЛЕНИЯ РЕСУРСА
+    trigger_auto_recalc(resource.project_id, db)
+    
     return {
         "id": resource.id,
         "name": resource.name,
@@ -397,11 +430,16 @@ def delete_resource(
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
     
+    project_id = resource.project_id
+    
     db.delete(resource)
     db.commit()
+    
+    # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ УДАЛЕНИЯ РЕСУРСА
+    trigger_auto_recalc(project_id, db)
+    
     return {"message": "Resource deleted successfully"}
 
-# Plan endpoints
 @app.post("/api/projects/{project_id}/plan/calculate", response_model=schemas.PlanCalculateResponse)
 def calculate_plan(
     project_id: int,
@@ -422,18 +460,20 @@ def calculate_plan(
     db.commit()
     db.refresh(db_plan)
     
-    # Here you would trigger Celery task
-    # For now, we'll run it synchronously (in production, use Celery)
+    # Trigger Celery task (or run synchronously if Celery not available)
     try:
-        # Update status to calculating
-        db_plan.status = "calculating"
-        db.commit()
+        from .tasks import calculate_plan_task
+        task = calculate_plan_task.delay(db_plan.id)
+        logger.info(f"Plan calculation task {task.id} started")
+    except Exception as e:
+        logger.warning(f"Celery not available: {e}. Running synchronously.")
+        # Fallback: run synchronously
+        from .planner import run_planning_algorithm
         
-        # Get all tasks with dependencies and resources
+        # Get tasks and resources
         tasks = db.query(models.Task).filter(models.Task.project_id == project_id).all()
         resources = db.query(models.Resource).filter(models.Resource.project_id == project_id).all()
         
-        # Prepare data for algorithm
         tasks_data = [
             {
                 "id": t.id,
@@ -458,7 +498,6 @@ def calculate_plan(
         for task in tasks:
             dependencies_data[task.id] = [d.depends_on_task_id for d in task.dependencies]
         
-        # Run planning algorithm
         schedule = run_planning_algorithm(project_id, tasks_data, resources_data, dependencies_data)
         
         if schedule:
@@ -469,13 +508,9 @@ def calculate_plan(
             db_plan.data = {"error": "Невозможно построить план"}
         
         db.commit()
-        
-    except Exception as e:
-        db_plan.status = "error"
-        db_plan.data = {"error": str(e)}
-        db.commit()
     
     return {"plan_id": db_plan.id, "status": db_plan.status}
+
 
 @app.get("/api/projects/{project_id}/plan/latest", response_model=schemas.PlanResponse)
 def get_latest_plan(
@@ -483,7 +518,6 @@ def get_latest_plan(
     current_user: dict = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify project ownership
     project = db.query(models.Project).filter(
         models.Project.id == project_id,
         models.Project.user_id == current_user["id"]
@@ -491,7 +525,6 @@ def get_latest_plan(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    # Get latest plan
     plan = db.query(models.Plan).filter(
         models.Plan.project_id == project_id
     ).order_by(models.Plan.created_at.desc()).first()
@@ -506,7 +539,6 @@ def get_latest_plan(
         "created_at": plan.created_at
     }
 
-# Health check
 @app.get("/health")
 def health_check():
     return {"status": "healthy"}

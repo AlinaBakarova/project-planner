@@ -80,8 +80,10 @@
                                 <label>Ресурсы:</label>
                                 <div id="task-resources"></div>
                             </div>
-                            <button id="save-task-btn">Сохранить задачу</button>
-                            <button id="cancel-task-edit" class="btn-secondary hidden">Отмена</button>
+                            <div class="task-form-buttons">
+                                <button id="save-task-btn">Сохранить задачу</button>
+                                <button id="cancel-task-edit" class="btn-secondary hidden">Отмена</button>
+                            </div>
                         </div>
                         
                         <div class="tasks-table-container">
@@ -112,7 +114,10 @@
                                 <option value="material">Материал</option>
                             </select>
                             <input type="number" id="resource-availability" placeholder="Доступность" min="1">
-                            <button id="save-resource-btn">Сохранить ресурс</button>
+                            <div class="resource-form-buttons">
+                                <button id="save-resource-btn">Сохранить ресурс</button>
+                                <button id="cancel-resource-edit" class="btn-secondary hidden">Отмена</button>
+                            </div>
                         </div>
                         
                         <div class="resources-table-container">

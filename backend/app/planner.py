@@ -12,4 +12,4 @@ def run_planning_algorithm(project_id: int, tasks: list, resources: list, depend
     """
     Wrapper function to run the planning algorithm
     """
-    return calculate_schedule(tasks, resources, dependencies)
+    return calculate_schedule(tasks, dependencies, resources)
