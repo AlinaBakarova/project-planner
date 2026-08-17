@@ -31,12 +31,14 @@ class TaskCreate(BaseModel):
     duration: float
     dependencies: List[int] = []
     resource_ids: List[int] = []
+    resource_quantities: Optional[Dict[int, int]] = None
 
 class TaskUpdate(BaseModel):
     name: Optional[str] = None
     duration: Optional[float] = None
     dependencies: Optional[List[int]] = None
     resource_ids: Optional[List[int]] = None
+    resource_quantities: Optional[Dict[int, int]] = None
 
 class TaskResponse(BaseModel):
     id: int
@@ -44,6 +46,7 @@ class TaskResponse(BaseModel):
     duration: float
     dependencies: List[int] = []
     resource_ids: List[int] = []
+    resource_quantities: Dict[int, int] = {}
 
 class TaskListResponse(BaseModel):
     tasks: List[TaskResponse]

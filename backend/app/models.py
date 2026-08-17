@@ -10,7 +10,8 @@ task_resource_association = Table(
     'task_resource_assignment',
     Base.metadata,
     Column('task_id', Integer, ForeignKey('tasks.id'), primary_key=True),
-    Column('resource_id', Integer, ForeignKey('resources.id'), primary_key=True)
+    Column('resource_id', Integer, ForeignKey('resources.id'), primary_key=True),
+    Column('quantity', Integer, default=1, nullable=False)
 )
 
 class User(Base):

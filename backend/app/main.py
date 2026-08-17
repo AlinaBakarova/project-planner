@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import logging
 import os
 
@@ -37,33 +38,39 @@ def trigger_auto_recalc(project_id: int, db: Session):
     """
     Automatically trigger plan recalculation when tasks or resources change.
     """
-    # Find the latest completed plan
+    # Проверить, есть ли задачи для планирования
+    tasks_count = db.query(models.Task).filter(
+        models.Task.project_id == project_id
+    ).count()
+    
+    if tasks_count == 0:
+        logger.info(f"No tasks for project {project_id}, skipping auto-recalc")
+        return None
+    
+    # Найти последний план (любой статус)
     latest_plan = db.query(models.Plan).filter(
-        models.Plan.project_id == project_id,
-        models.Plan.status == "done"
+        models.Plan.project_id == project_id
     ).order_by(models.Plan.created_at.desc()).first()
     
-    if latest_plan:
-        logger.info(f"Auto-recalculating plan for project {project_id}")
-        
-        # Create new plan with pending status
-        new_plan = models.Plan(
-            project_id=project_id,
-            status="pending",
-            data=None
-        )
-        db.add(new_plan)
-        db.commit()
-        db.refresh(new_plan)
-        
-        # Trigger Celery task
+    # Создать новый план с pending
+    new_plan = models.Plan(
+        project_id=project_id,
+        status="pending",
+        data=None
+    )
+    db.add(new_plan)
+    db.commit()
+    db.refresh(new_plan)
+    
+    # Запустить Celery задачу
+    try:
         from .tasks import calculate_plan_task
         task = calculate_plan_task.delay(new_plan.id)
-        logger.info(f"Auto-recalculation task {task.id} started")
-        
-        return new_plan.id
+        logger.info(f"Auto-recalculation task {task.id} started for project {project_id}")
+    except Exception as e:
+        logger.error(f"Failed to trigger auto-recalc: {e}")
     
-    return None
+    return new_plan.id
 
 # Auth endpoints
 @app.post("/api/auth/register", response_model=schemas.TokenResponse)
@@ -163,6 +170,38 @@ def create_task(
         duration=task.duration,
         status="pending"
     )
+
+    # Проверить доступность ресурсов
+    quantities = task.resource_quantities or {}
+    for resource_id in task.resource_ids:
+        resource = db.query(models.Resource).filter(
+            models.Resource.id == resource_id,
+            models.Resource.project_id == project_id
+        ).first()
+        if not resource:
+            raise HTTPException(status_code=400, detail=f"Resource {resource_id} not found")
+        
+        quantity = quantities.get(resource_id, 1)
+        
+        if resource.type == 'material':
+            # Для материалов: проверить остаток
+            used = db.execute(
+                text("SELECT COALESCE(SUM(quantity), 0) FROM task_resource_assignment WHERE resource_id = :rid"),
+                {"rid": resource_id}
+            ).scalar()
+            remaining = resource.availability - used
+            if quantity > remaining:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Недостаточно ресурса '{resource.name}': доступно {remaining}, запрошено {quantity}"
+                )
+        else:
+            # Для людей/оборудования: проверить общее количество
+            if quantity > resource.availability:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Недостаточно ресурса '{resource.name}': доступно {resource.availability}, запрошено {quantity}"
+                )
     db.add(db_task)
     db.flush()
     
@@ -182,6 +221,7 @@ def create_task(
         db.add(db_dependency)
     
     # Add resources
+    quantities = task.resource_quantities or {}
     for resource_id in task.resource_ids:
         resource = db.query(models.Resource).filter(
             models.Resource.id == resource_id,
@@ -194,6 +234,15 @@ def create_task(
     db.commit()
     db.refresh(db_task)
     
+    # Обновить quantity в association table
+    for resource_id in task.resource_ids:
+        quantity = quantities.get(resource_id, 1)
+        db.execute(
+            text("UPDATE task_resource_assignment SET quantity = :q WHERE task_id = :tid AND resource_id = :rid"),
+            {"q": quantity, "tid": db_task.id, "rid": resource_id}
+        )
+    db.commit()
+    
     # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ СОЗДАНИЯ ЗАДАЧИ
     trigger_auto_recalc(project_id, db)
     
@@ -202,7 +251,8 @@ def create_task(
         "name": db_task.name,
         "duration": db_task.duration,
         "dependencies": task.dependencies,
-        "resource_ids": task.resource_ids
+        "resource_ids": task.resource_ids,
+        "resource_quantities": quantities
     }
 
 @app.get("/api/projects/{project_id}/tasks", response_model=schemas.TaskListResponse)
@@ -225,12 +275,22 @@ def list_tasks(
         dependencies = [d.depends_on_task_id for d in task.dependencies]
         resource_ids = [r.id for r in task.resources]
         
+        # Получить quantity для каждого ресурса
+        resource_quantities = {}
+        for r in task.resources:
+            qty = db.execute(
+                text("SELECT quantity FROM task_resource_assignment WHERE task_id = :tid AND resource_id = :rid"),
+                {"tid": task.id, "rid": r.id}
+            ).scalar() or 1
+            resource_quantities[r.id] = qty
+        
         result.append({
             "id": task.id,
             "name": task.name,
             "duration": task.duration,
             "dependencies": dependencies,
-            "resource_ids": resource_ids
+            "resource_ids": resource_ids,
+            "resource_quantities": resource_quantities
         })
     
     return {"tasks": result}
@@ -269,6 +329,9 @@ def update_task(
     # Update resources
     if task_update.resource_ids is not None:
         task.resources.clear()
+        db.commit()
+        
+        quantities = task_update.resource_quantities or {}
         for resource_id in task_update.resource_ids:
             resource = db.query(models.Resource).filter(
                 models.Resource.id == resource_id,
@@ -276,6 +339,14 @@ def update_task(
             ).first()
             if resource:
                 task.resources.append(resource)
+                db.commit()
+                
+                quantity = quantities.get(resource_id, 1)
+                db.execute(
+                    text("UPDATE task_resource_assignment SET quantity = :q WHERE task_id = :tid AND resource_id = :rid"),
+                    {"q": quantity, "tid": task_id, "rid": resource_id}
+                )
+                db.commit()
     
     db.commit()
     db.refresh(task)
@@ -285,13 +356,21 @@ def update_task(
     
     dependencies = [d.depends_on_task_id for d in task.dependencies]
     resource_ids = [r.id for r in task.resources]
+    resource_quantities = {}
+    for r in task.resources:
+        qty = db.execute(
+            text("SELECT quantity FROM task_resource_assignment WHERE task_id = :tid AND resource_id = :rid"),
+            {"tid": task.id, "rid": r.id}
+        ).scalar() or 1
+        resource_quantities[r.id] = qty
     
     return {
         "id": task.id,
         "name": task.name,
         "duration": task.duration,
         "dependencies": dependencies,
-        "resource_ids": resource_ids
+        "resource_ids": resource_ids,
+        "resource_quantities": resource_quantities
     }
 
 @app.delete("/api/tasks/{task_id}")
@@ -430,6 +509,19 @@ def delete_resource(
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
     
+   
+
+    from sqlalchemy import text
+    tasks_count = db.execute(
+        text("SELECT COUNT(*) FROM task_resource_assignment WHERE resource_id = :rid"),
+        {"rid": resource_id}
+    ).scalar()
+    
+    if tasks_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Невозможно удалить ресурс: он используется в {tasks_count} задачах"
+        )
     project_id = resource.project_id
     
     db.delete(resource)
@@ -474,15 +566,23 @@ def calculate_plan(
         tasks = db.query(models.Task).filter(models.Task.project_id == project_id).all()
         resources = db.query(models.Resource).filter(models.Resource.project_id == project_id).all()
         
-        tasks_data = [
-            {
+        tasks_data = []
+        for t in tasks:
+            resource_quantities = {}
+            for r in t.resources:
+                qty = db.execute(
+                    text("SELECT quantity FROM task_resource_assignment WHERE task_id = :tid AND resource_id = :rid"),
+                    {"tid": t.id, "rid": r.id}
+                ).scalar() or 1
+                resource_quantities[r.id] = qty
+            
+            tasks_data.append({
                 "id": t.id,
                 "name": t.name,
                 "duration": t.duration,
-                "resource_ids": [r.id for r in t.resources]
-            }
-            for t in tasks
-        ]
+                "resource_ids": [r.id for r in t.resources],
+                "resource_quantities": resource_quantities
+            })
         
         resources_data = [
             {
@@ -494,15 +594,19 @@ def calculate_plan(
             for r in resources
         ]
         
-        dependencies_data = {}
+        dependencies_data = []
         for task in tasks:
-            dependencies_data[task.id] = [d.depends_on_task_id for d in task.dependencies]
+            for dep in task.dependencies:
+                dependencies_data.append({
+                    "task_id": task.id,
+                    "depends_on_task_id": dep.depends_on_task_id
+                })
         
         schedule = run_planning_algorithm(project_id, tasks_data, resources_data, dependencies_data)
         
         if schedule:
             db_plan.status = "done"
-            db_plan.data = schedule
+            db_plan.data = {"tasks": schedule}
         else:
             db_plan.status = "error"
             db_plan.data = {"error": "Невозможно построить план"}

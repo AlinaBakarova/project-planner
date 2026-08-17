@@ -17,7 +17,7 @@ body {
 /* Аутентификация */
 .screen {
     min-height: 100vh;
-    display: flex;
+    display: block;
     align-items: center;
     justify-content: center;
 }
@@ -134,18 +134,20 @@ body {
     color: white;
     padding: 15px 30px;
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-start;
     align-items: center;
+    gap: 40px;
 }
 
 .main-header h1 {
     font-size: 24px;
+    margin-right: 20px; 
 }
 
 .user-info {
     display: flex;
     align-items: center;
-    gap: 15px;
+    gap: 20px;
 }
 
 .main-content {
@@ -155,7 +157,7 @@ body {
 
 /* Сайдбар проектов */
 .projects-sidebar {
-    width: 280px;
+    width: 380px;
     background: white;
     border-right: 1px solid #e0e0e0;
     padding: 20px;

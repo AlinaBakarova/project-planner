@@ -20,6 +20,21 @@ class ProjectPlanner {
         if (this.token) {
             this.showMainScreen();
             this.loadProjects();
+            
+            // Восстановить план из localStorage
+            const savedPlanData = localStorage.getItem('lastPlanData');
+            const savedProjectId = localStorage.getItem('lastProjectId');
+            const savedTasks = localStorage.getItem('lastTasks');
+            
+            if (savedPlanData && savedProjectId) {
+                try {
+                    this.planData = JSON.parse(savedPlanData);
+                    this.tasks = JSON.parse(savedTasks || '[]');
+                } catch (e) {
+                    console.error('Error restoring plan from localStorage:', e);
+                    this.planData = null;
+                }
+            }
         } else {
             this.showAuthScreen();
         }
@@ -225,6 +240,7 @@ class ProjectPlanner {
     }
 
     // Аутентификация
+    
     async login() {
         const username = document.getElementById('login-username').value.trim();
         const password = document.getElementById('login-password').value;
@@ -245,7 +261,27 @@ class ProjectPlanner {
             localStorage.setItem('currentUser', this.currentUser);
             
             this.showMainScreen();
-            this.clearPlanCache(); 
+            
+            // Восстановить план из localStorage
+            const lastProjectId = localStorage.getItem('lastProjectId');
+            
+            if (lastProjectId) {
+                const savedPlan = localStorage.getItem(`plan_${lastProjectId}`);
+                const savedTasks = localStorage.getItem(`tasks_${lastProjectId}`);
+                
+                if (savedPlan && savedTasks) {
+                    try {
+                        this.planData = JSON.parse(savedPlan);
+                        this.tasks = JSON.parse(savedTasks);
+                        console.log('Plan restored from localStorage');
+                    } catch (e) {
+                        console.error('Error restoring plan:', e);
+                        this.planData = null;
+                        this.tasks = [];
+                    }
+                }
+            }
+            
             this.loadProjects();
         } catch (error) {
             console.error('Login error:', error);
@@ -298,7 +334,14 @@ class ProjectPlanner {
     }
 
     logout() {
-        // Очищаем все состояние
+        // Сохранить план для каждого проекта
+        if (this.currentProject && this.planData && this.planData.tasks) {
+            localStorage.setItem(`plan_${this.currentProject.id}`, JSON.stringify(this.planData));
+            localStorage.setItem(`tasks_${this.currentProject.id}`, JSON.stringify(this.tasks));
+            localStorage.setItem('lastProjectId', this.currentProject.id);
+        }
+        
+        // Очищаем состояние
         this.token = null;
         this.currentUser = null;
         this.currentProject = null;
@@ -310,15 +353,13 @@ class ProjectPlanner {
         this.editingResourceId = null;
         
         this.stopPolling();
-        this.clearPlanCache(); 
+        // НЕ вызывать clearPlanCache() — оставить данные в localStorage
         
-        // Очищаем localStorage
         localStorage.removeItem('token');
         localStorage.removeItem('currentUser');
+        // НЕ удалять plan_*, tasks_*, lastProjectId
         
-        // Очищаем все UI элементы
         this.clearAllUI();
-        
         this.showAuthScreen();
         
         document.getElementById('login-form').reset();
@@ -353,12 +394,36 @@ class ProjectPlanner {
     }
 
     // Проекты
+    
     async loadProjects() {
         this.clearPlanCache();
+        
         try {
             const response = await this.apiRequest('/api/projects');
             const projects = response.projects || [];
             this.renderProjects(projects);
+            
+            const lastProjectId = localStorage.getItem('lastProjectId');
+            if (lastProjectId) {
+                const project = projects.find(p => p.id == lastProjectId);
+                if (project) {
+                    await this.selectProject(project);
+                    
+                    const savedPlan = localStorage.getItem(`plan_${project.id}`);
+                    const savedTasks = localStorage.getItem(`tasks_${project.id}`);
+                    
+                    if (savedPlan && savedTasks) {
+                        try {
+                            this.planData = JSON.parse(savedPlan);
+                            this.tasks = JSON.parse(savedTasks);
+                            this.renderGanttChart(this.planData);
+                            this.updatePlanStatus('done');
+                        } catch (e) {
+                            console.error('Error restoring project plan:', e);
+                        }
+                    }
+                }
+            }
         } catch (error) {
             console.error('Ошибка загрузки проектов:', error);
         }
@@ -402,10 +467,16 @@ class ProjectPlanner {
     }
 
     async selectProject(project) {
-        // ✅ ОЧИЩАЕМ СТАРЫЕ ДАННЫЕ ПЕРЕД ЗАГРУЗКОЙ НОВОГО ПРОЕКТА
+        // Сохранить план ТЕКУЩЕГО проекта перед переключением
+        if (this.currentProject && this.planData && this.planData.tasks) {
+            localStorage.setItem(`plan_${this.currentProject.id}`, JSON.stringify(this.planData));
+            localStorage.setItem(`tasks_${this.currentProject.id}`, JSON.stringify(this.tasks));
+        }
+        
+        // Очищаем старые данные
         this.currentProject = null;
         this.currentTask = null;
-        this.planData = null;  // ← КРИТИЧЕСКИ ВАЖНО!
+        this.planData = null;
         this.tasks = [];
         this.resources = [];
         
@@ -416,7 +487,7 @@ class ProjectPlanner {
         document.getElementById('plan-status').className = 'plan-status';
         document.getElementById('plan-status-text').textContent = 'Статус: нет плана';
         
-        // Теперь устанавливаем новый проект
+        // Устанавливаем новый проект
         this.currentProject = project;
         
         document.getElementById('no-project-selected').classList.add('hidden');
@@ -427,12 +498,27 @@ class ProjectPlanner {
             li.classList.toggle('active', li.dataset.projectId == project.id);
         });
         
-        // Загружаем данные для нового проекта
+        // Загружаем данные
         await Promise.all([
             this.loadTasks(),
             this.loadResources(),
-            //this.loadLatestPlan()
+            this.loadLatestPlan()
         ]);
+        
+        // Если есть сохранённый план для ЭТОГО проекта — восстановить
+        const savedPlan = localStorage.getItem(`plan_${project.id}`);
+        const savedTasks = localStorage.getItem(`tasks_${project.id}`);
+        
+        if (savedPlan && savedTasks) {
+            try {
+                this.planData = JSON.parse(savedPlan);
+                this.tasks = JSON.parse(savedTasks);
+                this.renderGanttChart(this.planData);
+                this.updatePlanStatus('done');
+            } catch (e) {
+                console.error('Error restoring project plan:', e);
+            }
+        }
         
         this.loadTaskFormData();
     }
@@ -564,21 +650,56 @@ class ProjectPlanner {
         }
         
         this.resources.forEach(resource => {
-            const label = document.createElement('label');
-            label.className = 'checkbox-label';
+            const wrapper = document.createElement('div');
+            wrapper.className = 'resource-checkbox-item';
             
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.value = resource.id;
-            checkbox.dataset.resourceId = resource.id;
+            checkbox.id = `resource-${resource.id}`;
             
             if (this.currentTask && this.currentTask.resource_ids.includes(resource.id)) {
                 checkbox.checked = true;
             }
             
-            label.appendChild(checkbox);
-            label.appendChild(document.createTextNode(`${resource.name} (${resource.type})`));
-            resourcesContainer.appendChild(label);
+            // Вычислить остаток
+            let remaining = resource.availability;
+            if (resource.type === 'material') {
+                const used = this.tasks.reduce((sum, task) => {
+                    if (task.resource_ids && task.resource_ids.includes(resource.id)) {
+                        const qty = (task.resource_quantities && task.resource_quantities[resource.id]) || 1;
+                        return sum + qty;
+                    }
+                    return sum;
+                }, 0);
+                remaining = resource.availability - used;
+            }
+            
+            const label = document.createElement('label');
+            label.htmlFor = `resource-${resource.id}`;
+            
+            if (resource.type === 'material') {
+                label.textContent = `${resource.name} (осталось: ${remaining})`;
+            } else {
+                label.textContent = `${resource.name} (доступно: ${resource.availability})`;
+            }
+            
+            const quantityInput = document.createElement('input');
+            quantityInput.type = 'number';
+            quantityInput.min = 1;
+            quantityInput.max = Math.max(1, remaining);
+            quantityInput.value = (this.currentTask && this.currentTask.resource_quantities && this.currentTask.resource_quantities[resource.id]) || 1;
+            quantityInput.id = `resource-quantity-${resource.id}`;
+            quantityInput.disabled = !checkbox.checked;
+            
+            checkbox.addEventListener('change', () => {
+                quantityInput.disabled = !checkbox.checked;
+            });
+            
+            wrapper.appendChild(checkbox);
+            wrapper.appendChild(label);
+            wrapper.appendChild(quantityInput);
+            resourcesContainer.appendChild(wrapper);
         });
     }
 
@@ -594,30 +715,62 @@ class ProjectPlanner {
         const dependencies = Array.from(document.querySelectorAll('#task-dependencies input:checked'))
             .map(checkbox => parseInt(checkbox.value));
         
-        const resourceIds = Array.from(document.querySelectorAll('#task-resources input:checked'))
-            .map(checkbox => parseInt(checkbox.value));
+        const resourceQuantities = {};
+        Array.from(document.querySelectorAll('#task-resources input[type="checkbox"]:checked'))
+            .forEach(checkbox => {
+                const resourceId = parseInt(checkbox.value);
+                const quantityInput = document.getElementById(`resource-quantity-${resourceId}`);
+                const quantity = quantityInput ? (parseInt(quantityInput.value) || 1) : 1;
+                resourceQuantities[resourceId] = quantity;
+            });
+        
+        // Валидация ресурсов
+        for (const [resourceId, quantity] of Object.entries(resourceQuantities)) {
+            const resource = this.resources.find(r => r.id === parseInt(resourceId));
+            if (!resource) continue;
+            
+            if (resource.type === 'material') {
+                const used = this.tasks.reduce((sum, task) => {
+                    if (task.resource_ids && task.resource_ids.includes(resource.id)) {
+                        const qty = (task.resource_quantities && task.resource_quantities[resource.id]) || 1;
+                        return sum + qty;
+                    }
+                    return sum;
+                }, 0);
+                const remaining = resource.availability - used;
+                
+                if (quantity > remaining) {
+                    this.showNotification(
+                        `Недостаточно ресурса '${resource.name}': доступно ${remaining}, запрошено ${quantity}`,
+                        'error'
+                    );
+                    return;
+                }
+            } else {
+                if (quantity > resource.availability) {
+                    this.showNotification(
+                        `Недостаточно ресурса '${resource.name}': доступно ${resource.availability}, запрошено ${quantity}`,
+                        'error'
+                    );
+                    return;
+                }
+            }
+        }
         
         const taskData = {
             name,
             duration,
             dependencies,
-            resource_ids: resourceIds
+            resource_ids: Object.keys(resourceQuantities).map(Number),
+            resource_quantities: resourceQuantities
         };
         
         try {
             if (this.currentTask) {
-                await this.apiRequest(
-                    `/api/tasks/${this.currentTask.id}`,
-                    'PUT',
-                    taskData
-                );
+                await this.apiRequest(`/api/tasks/${this.currentTask.id}`, 'PUT', taskData);
                 this.showNotification('Задача обновлена', 'success');
             } else {
-                await this.apiRequest(
-                    `/api/projects/${this.currentProject.id}/tasks`,
-                    'POST',
-                    taskData
-                );
+                await this.apiRequest(`/api/projects/${this.currentProject.id}/tasks`, 'POST', taskData);
                 this.showNotification('Задача создана', 'success');
             }
 
@@ -628,9 +781,8 @@ class ProjectPlanner {
             document.getElementById('save-task-btn').textContent = 'Сохранить задачу';
 
             await this.loadTasks();
+            await this.loadResources();
             this.loadTaskFormData();
-        
-            
             
         } catch (error) {
             this.showError(error.message);
@@ -702,11 +854,23 @@ class ProjectPlanner {
         this.resources.forEach(resource => {
             const tr = document.createElement('tr');
             
+            let displayAvailability = resource.availability;
+            if (resource.type === 'material') {
+                const used = this.tasks.reduce((sum, task) => {
+                    if (task.resource_ids && task.resource_ids.includes(resource.id)) {
+                        const qty = (task.resource_quantities && task.resource_quantities[resource.id]) || 1;
+                        return sum + qty;
+                    }
+                    return sum;
+                }, 0);
+                displayAvailability = resource.availability - used;
+            }
+            
             tr.innerHTML = `
                 <td>${resource.id}</td>
                 <td>${resource.name}</td>
-                <td>${resource.type}</td>
-                <td>${resource.availability}</td>
+                <td>${resource.type === 'material' ? 'Материал' : resource.type === 'human' ? 'Человек' : 'Оборудование'}</td>
+                <td>${resource.type === 'material' ? `${displayAvailability} (из ${resource.availability})` : resource.availability}</td>
                 <td>
                     <button class="action-btn edit-btn" onclick="app.editResource(${resource.id})">Редактировать</button>
                     <button class="action-btn delete-btn" onclick="app.deleteResource(${resource.id})">Удалить</button>
@@ -1001,7 +1165,7 @@ class ProjectPlanner {
         if (maxTime === minTime) maxTime = minTime + 60;
         
         const timeRange = maxTime - minTime;
-        const LABEL_WIDTH = 200;
+        const LABEL_WIDTH = 140;
         const hourStep = 60;
         const numHours = Math.ceil(timeRange / hourStep);
         
@@ -1058,6 +1222,23 @@ class ProjectPlanner {
         }
         
         ganttContainer.appendChild(timelineHeader);
+
+                // Строка с общим временем
+        const totalTimeDiv = document.createElement('div');
+        totalTimeDiv.style.cssText = `
+            text-align: right;
+            font-size: 13px;
+            color: #555;
+            margin-bottom: 10px;
+            font-weight: bold;
+        `;
+
+        const totalMinutes = timeRange;
+        const totalHours = Math.floor(totalMinutes / 60);
+        const remainingMinutes = Math.round(totalMinutes % 60);
+        totalTimeDiv.textContent = `Общее время: ${totalHours} часов ${remainingMinutes} минут`;
+
+        ganttContainer.appendChild(totalTimeDiv);
         
         // Полоски задач
         validTasks.forEach(planTask => {
