@@ -19,7 +19,7 @@ Project Planner — это локально разворачиваемый пр�
 ### Запуск через Docker
 
 ```bash
-docker-compose up --build
+docker-compose up -d
 ```
 Запуск вручную (если Docker Compose не работает)
 
@@ -60,7 +60,7 @@ docker build -t project_backend ./backend
 docker run -d \
   --name scheduler-backend \
   -p 8000:8000 \
-  -v backend-data:/data \
+  --v project_backend-data:/data \
   -e DATABASE_URL=sqlite:////data/app.db \
   -e REDIS_URL=redis://redis:6379/0 \
   -e SECRET_KEY=dev-secret-key-change-in-production \
@@ -71,7 +71,7 @@ docker run -d \
 ```bash
 docker run -d \
   --name celery-worker \
-  -v backend-data:/data \
+  --v project_backend-data:/data \
   -e DATABASE_URL=sqlite:////data/app.db \
   -e REDIS_URL=redis://redis:6379/0 \
   --link redis:redis \
