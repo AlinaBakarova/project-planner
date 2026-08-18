@@ -21,10 +21,6 @@ Project Planner — это локально разворачиваемый пр�
 ```bash
 docker-compose up -d
 ```
-Запуск вручную (если Docker Compose не работает)
-
-# Redis
-docker run -d --name redis -p 6379:6379 redis:7-alpine
 
 # Доступ
 Frontend: http://localhost:3000
@@ -32,7 +28,47 @@ Frontend: http://localhost:3000
 API (Swagger): http://localhost:8000/docs
 
 Health check: http://localhost:8000/health
+
+# Запуск вручную (если Docker Compose не работает)
+
+## Redis
 ```bash
+docker run -d --name redis -p 6379:6379 redis:7-alpine
+```
+## Backend
+```
+docker build -t project_backend ./backend
+docker run -d \
+  --name scheduler-backend \
+  -p 8000:8000 \
+  -v project_backend-data:/data \
+  -e DATABASE_URL=sqlite:////data/app.db \
+  -e REDIS_URL=redis://redis:6379/0 \
+  -e SECRET_KEY=dev-secret-key-change-in-production \
+  --link redis:redis \
+  project_backend
+```
+## Celery Worker
+```bash
+docker run -d \
+  --name celery-worker \
+  -v project_backend-data:/data \
+  -e DATABASE_URL=sqlite:////data/app.db \
+  -e REDIS_URL=redis://redis:6379/0 \
+  --link redis:redis \
+  project_backend \
+  celery -A app.celery_app worker --loglevel=info
+```
+## Frontend
+```bash
+docker run -d \
+  --name scheduler-frontend \
+  -p 3000:80 \
+  -v $(pwd)/frontend:/usr/share/nginx/html:ro \
+  nginx:alpine
+```  
+  
+ ```bash
 ┌─────────────────────────────────────────┐
 │            Frontend (nginx)             │
 │         http://localhost:3000           │
@@ -53,41 +89,7 @@ Health check: http://localhost:8000/health
 │  SQLite   │ │  Redis  │ │ Celery  │
 │ (данные)  │ │(брокер) │ │ Worker  │
 └───────────┘ └─────────┘ └─────────┘
-```
-# Backend
-```
-docker build -t project_backend ./backend
-docker run -d \
-  --name scheduler-backend \
-  -p 8000:8000 \
-  --v project_backend-data:/data \
-  -e DATABASE_URL=sqlite:////data/app.db \
-  -e REDIS_URL=redis://redis:6379/0 \
-  -e SECRET_KEY=dev-secret-key-change-in-production \
-  --link redis:redis \
-  project_backend
-```
-# Celery Worker
-```bash
-docker run -d \
-  --name celery-worker \
-  --v project_backend-data:/data \
-  -e DATABASE_URL=sqlite:////data/app.db \
-  -e REDIS_URL=redis://redis:6379/0 \
-  --link redis:redis \
-  project_backend \
-  celery -A app.celery_app worker --loglevel=info
-```
-# Frontend
-```bash
-docker run -d \
-  --name scheduler-frontend \
-  -p 3000:80 \
-  -v $(pwd)/frontend:/usr/share/nginx/html:ro \
-  nginx:alpine
-```  
-  
-  
+``` 
   
  ## Модель планирования
 # Задачи
