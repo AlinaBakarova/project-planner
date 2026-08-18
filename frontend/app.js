@@ -17,6 +17,9 @@ class ProjectPlanner {
 
     init() {
         console.log('Init called');
+        console.log('export-plan-btn exists:', !!document.getElementById('export-plan-btn'));
+        console.log('export-menu exists:', !!document.getElementById('export-menu'));
+    
         
         this.bindEvents();
         
@@ -45,18 +48,178 @@ class ProjectPlanner {
         console.log('Init completed');
     }
 
-    exportPlan() {
+    async exportPlan() {
         if (!this.currentProject) {
             this.showNotification('Выберите проект', 'error');
             return;
         }
         
-        const url = `${this.BASE_URL}/api/projects/${this.currentProject.id}/plan/export`;
-        window.open(url, '_blank');
+        try {
+            const token = this.token || localStorage.getItem('token');
+            
+            const response = await fetch(
+                `${this.BASE_URL}/api/projects/${this.currentProject.id}/plan/export`,
+                {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                }
+            );
+            
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || `HTTP ${response.status}`);
+            }
+            
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `plan_${this.currentProject.id}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            
+            URL.revokeObjectURL(url);
+            
+            this.showNotification('Экспорт CSV выполнен', 'success');
+        } catch (error) {
+            console.error('Export error:', error);
+            this.showError(`Ошибка экспорта: ${error.message}`);
+        }
+    }
+
+    async importProject(file) {
+        if (!file) return;
+        
+        try {
+            const text = await file.text();
+            let importData;
+            
+            if (file.name.endsWith('.json')) {
+                importData = JSON.parse(text);
+                
+                // 🔥 ЕСЛИ НЕТ project_name — запросить у пользователя
+                if (!importData.project_name) {
+                    const name = prompt('Введите название проекта:');
+                    if (!name || name.trim() === '') {
+                        this.showNotification('Название проекта обязательно', 'error');
+                        return;
+                    }
+                    importData.project_name = name.trim();
+                }
+            } else if (file.name.endsWith('.csv')) {
+                importData = this.parseCsvImport(text);
+                const name = prompt('Введите название проекта:', 'Импортированный проект');
+                if (!name || name.trim() === '') {
+                    this.showNotification('Название проекта обязательно', 'error');
+                    return;
+                }
+                importData.project_name = name.trim();
+            } else {
+                this.showNotification('Поддерживаются только JSON и CSV', 'error');
+                return;
+            }
+            
+            const response = await this.apiRequest('/api/projects/import', 'POST', importData);
+            
+            this.showNotification('Проект импортирован', 'success');
+            await this.loadProjects();
+            await this.selectProject(response);
+            
+            document.getElementById('import-file-input').value = '';
+            
+        } catch (error) {
+            console.error('Import error:', error);
+            this.showError(`Ошибка импорта: ${error.message}`);
+        }
+    }
+
+    parseCsvImport(text) {
+        const lines = text.trim().split('\n');
+        if (lines.length < 2) {
+            throw new Error('CSV слишком короткий');
+        }
+        
+        const headers = lines[0].split(',');
+        const resources = new Set();
+        const tasks = [];
+        
+        for (let i = 1; i < lines.length; i++) {
+            const values = lines[i].split(',');
+            const task = {
+                name: values[0]?.trim(),
+                duration: parseInt(values[1]) || 60,
+                dependencies: [],
+                resources: []
+            };
+            
+            for (let j = 2; j < headers.length; j++) {
+                if (values[j] && parseInt(values[j]) > 0) {
+                    const resourceName = headers[j].trim();
+                    resources.add(resourceName);
+                    task.resources.push({
+                        resource_name: resourceName,
+                        quantity: parseInt(values[j])
+                    });
+                }
+            }
+            
+            if (task.name) {
+                tasks.push(task);
+            }
+        }
+        
+        return {
+            project_name: 'Импортированный проект',
+            resources: Array.from(resources).map(name => ({
+                name,
+                type: 'material',
+                availability: 100
+            })),
+            tasks
+        };
     }
 
     bindEvents() {
+    // Экспорт
+
+        document.getElementById('import-project-btn').addEventListener('click', () => {
+            document.getElementById('import-file-input').click();
+        });
+
+        document.getElementById('import-file-input').addEventListener('change', (e) => {
+            this.importProject(e.target.files[0]);
+        });
+        document.getElementById('export-plan-btn').addEventListener('click', () => this.toggleExportMenu());
+        
+        const exportCsvBtn = document.getElementById('export-csv-btn');
+        if (exportCsvBtn) exportCsvBtn.addEventListener('click', () => this.exportPlan('csv'));
+        
+        const exportJsonBtn = document.getElementById('export-json-btn');
+        if (exportJsonBtn) exportJsonBtn.addEventListener('click', () => this.exportPlan('json'));
+        
+        const exportPdfBtn = document.getElementById('export-pdf-btn');
+        if (exportPdfBtn) exportPdfBtn.addEventListener('click', () => this.exportPlan('pdf'));
+
         // Аутентификация
+        const docsBtn = document.getElementById('docs-btn');
+        if (docsBtn) docsBtn.addEventListener('click', () => this.showDocs());
+
+        const projectsBtn = document.getElementById('projects-btn');
+        if (projectsBtn) projectsBtn.addEventListener('click', () => this.showProjects());
+
+        const docsProjectsBtn = document.getElementById('docs-projects-btn');
+        if (docsProjectsBtn) docsProjectsBtn.addEventListener('click', () => this.showProjects());
+
+        const docsDocsBtn = document.getElementById('docs-docs-btn');
+        if (docsDocsBtn) docsDocsBtn.addEventListener('click', () => this.showDocs());
+
+        const docsLogoutBtn = document.getElementById('docs-logout-btn');
+        if (docsLogoutBtn) docsLogoutBtn.addEventListener('click', () => this.logout());
+
         document.querySelectorAll('.auth-tabs .tab-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -87,22 +250,125 @@ class ProjectPlanner {
             });
         });
 
-        const exportBtn = document.getElementById('export-plan-btn');
-        if (exportBtn) {
-            exportBtn.addEventListener('click', () => this.exportPlan());
-        }
         // Задачи
         document.getElementById('save-task-btn').addEventListener('click', () => this.saveTask());
         document.getElementById('cancel-task-edit').addEventListener('click', () => this.cancelTaskEdit());
 
         // Ресурсы
         document.getElementById('save-resource-btn').addEventListener('click', () => this.saveResource());
-        
-        // Добавляем обработчик для кнопки отмены редактирования ресурса
         document.getElementById('cancel-resource-edit').addEventListener('click', () => this.cancelResourceEdit());
 
         // План
         document.getElementById('calculate-plan-btn').addEventListener('click', () => this.calculatePlan());
+    }
+
+    toggleExportMenu() {
+        const menu = document.getElementById('export-menu');
+        if (menu) {
+            menu.classList.toggle('hidden');
+        }
+    }
+
+    async exportPlan(format = 'csv') {
+        if (!this.currentProject) {
+            this.showNotification('Выберите проект', 'error');
+            return;
+        }
+        
+        // Скрыть меню
+        const menu = document.getElementById('export-menu');
+        if (menu) menu.classList.add('hidden');
+        
+        try {
+            const token = this.token || localStorage.getItem('token');
+            
+            if (format === 'pdf') {
+                // PDF — скриншот диаграммы
+                await this.exportAsPdf();
+                return;
+            }
+            
+            const endpoint = format === 'json' 
+                ? `/api/projects/${this.currentProject.id}/plan/export-json`
+                : `/api/projects/${this.currentProject.id}/plan/export`;
+            
+            const response = await fetch(`${this.BASE_URL}${endpoint}`, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${token}`
+                }
+            });
+            
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || `HTTP ${response.status}`);
+            }
+            
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `plan_${this.currentProject.id}.${format}`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            
+            URL.revokeObjectURL(url);
+            
+            this.showNotification(`Экспорт ${format.toUpperCase()} выполнен`, 'success');
+        } catch (error) {
+            console.error('Export error:', error);
+            this.showError(`Ошибка экспорта: ${error.message}`);
+        }
+    }
+
+    async exportAsPdf() {
+        // Скриншот диаграммы Ганта
+        const ganttChart = document.getElementById('gantt-chart');
+        if (!ganttChart || !this.planData) {
+            this.showNotification('Нет плана для экспорта', 'error');
+            return;
+        }
+        
+        try {
+            // Используем html2canvas (нужно добавить библиотеку)
+            const html2canvas = window.html2canvas;
+            if (!html2canvas) {
+                this.showNotification('Библиотека для PDF не загружена', 'error');
+                return;
+            }
+            
+            const canvas = await html2canvas(ganttChart);
+            const imgData = canvas.toDataURL('image/png');
+            
+            const { jsPDF } = window.jspdf;
+            if (!jsPDF) {
+                this.showNotification('Библиотека jsPDF не загружена', 'error');
+                return;
+            }
+            
+            const pdf = new jsPDF('landscape');
+            const imgWidth = 280;
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            pdf.addImage(imgData, 'PNG', 10, 10, imgWidth, imgHeight);
+            pdf.save(`plan_${this.currentProject.id}.pdf`);
+            
+            this.showNotification('PDF экспортирован', 'success');
+        } catch (error) {
+            console.error('PDF export error:', error);
+            this.showError(`Ошибка PDF: ${error.message}`);
+        }
+    }
+    showDocs() {
+        document.getElementById('main-screen').classList.add('hidden');
+        document.getElementById('docs-screen').classList.remove('hidden');
+        document.getElementById('docs-current-user').textContent = this.currentUser || 'Пользователь';
+    }
+
+    showProjects() {
+        document.getElementById('docs-screen').classList.add('hidden');
+        document.getElementById('main-screen').classList.remove('hidden');
     }
 
     // API запросы

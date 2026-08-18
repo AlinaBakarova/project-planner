@@ -157,7 +157,7 @@ body {
 
 /* Сайдбар проектов */
 .projects-sidebar {
-    width: 380px;
+    width: 420px;
     background: white;
     border-right: 1px solid #e0e0e0;
     padding: 20px;
@@ -608,6 +608,95 @@ body {
 
 .graph-conflict {
     animation: pulse 1.5s infinite;
+}
+
+.nav-btn {
+    padding: 8px 16px;
+    background: transparent;
+    color: white;
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.3s;
+}
+
+.nav-btn:hover {
+    background: rgba(255,255,255,0.1);
+}
+
+.nav-btn.active {
+    background: #3498db;
+    border-color: #3498db;
+}
+
+.docs-content {
+    max-width: 800px;
+    margin: 40px auto;
+    padding: 30px;
+    background: white;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+.docs-content h2 {
+    margin-bottom: 30px;
+    color: #2c3e50;
+    text-align: center;
+}
+
+.docs-section {
+    margin-bottom: 25px;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 8px;
+}
+
+.docs-section h3 {
+    color: #3498db;
+    margin-bottom: 10px;
+}
+
+.docs-section ul {
+    list-style: disc;
+    padding-left: 20px;
+}
+
+.docs-section li {
+    margin-bottom: 8px;
+    line-height: 1.5;
+}
+
+.export-dropdown {
+    position: relative;
+}
+
+.export-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 5px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+    z-index: 100;
+    min-width: 160px;
+}
+
+.export-option {
+    display: block;
+    width: 100%;
+    padding: 10px 15px;
+    background: white;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.2s;
+}
+
+.export-option:hover {
+    background: #f0f0f0;
 }
 
 @keyframes pulse {

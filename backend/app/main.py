@@ -388,7 +388,168 @@ def delete_task(
     
     return {"message": "Task deleted successfully"}
 
+
 # Resource endpoints
+
+@app.get("/api/projects/{project_id}/plan/export-json")
+def export_plan_json(
+    project_id: int,
+    current_user: dict = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    project = db.query(models.Project).filter(
+        models.Project.id == project_id,
+        models.Project.user_id == current_user["id"]
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    plan = db.query(models.Plan).filter(
+        models.Plan.project_id == project_id
+    ).order_by(models.Plan.created_at.desc()).first()
+    
+    if not plan or plan.status != "done" or not plan.data:
+        raise HTTPException(status_code=404, detail="No completed plan found")
+    
+    # Получить полную информацию о задачах и ресурсах
+    tasks = db.query(models.Task).filter(models.Task.project_id == project_id).all()
+    resources = db.query(models.Resource).filter(models.Resource.project_id == project_id).all()
+    
+    task_map = {t.id: t for t in tasks}
+    resource_map = {r.id: r for r in resources}
+    
+    export_data = {
+        "project_name": project.name,
+        "resources": [
+            {
+                "name": r.name,
+                "type": r.type,
+                "availability": r.availability
+            }
+            for r in resources
+        ],
+        "tasks": []
+    }
+    
+    for t in tasks:
+        task_data = {
+            "name": t.name,
+            "duration": t.duration,
+            "dependencies": [task_map[d.depends_on_task_id].name for d in t.dependencies if d.depends_on_task_id in task_map],
+            "resources": []
+        }
+        
+        for r in t.resources:
+            qty = db.execute(
+                text("SELECT quantity FROM task_resource_assignment WHERE task_id = :tid AND resource_id = :rid"),
+                {"tid": t.id, "rid": r.id}
+            ).scalar() or 1
+            task_data["resources"].append({
+                "resource_name": r.name,
+                "quantity": qty
+            })
+        
+        export_data["tasks"].append(task_data)
+    
+    import json
+    from fastapi.responses import StreamingResponse
+    
+    json_data = json.dumps(export_data, ensure_ascii=False, indent=2)
+    
+    return StreamingResponse(
+        iter([json_data]),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename=plan_{project_id}.json"}
+    )
+
+@app.post("/api/projects/import")
+def import_project(
+    import_data: dict,
+    current_user: dict = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    project_name = import_data.get("project_name")
+    if not project_name:
+        raise HTTPException(status_code=400, detail="Project name is required")
+    
+    # Создать проект
+    db_project = models.Project(name=project_name, user_id=current_user["id"])
+    db.add(db_project)
+    db.flush()
+    
+    # Создать ресурсы
+    resource_map = {}
+    for idx, res in enumerate(import_data.get("resources", [])):
+        res_name = res.get("name") or f"Resource {idx + 1}"
+        
+        db_resource = models.Resource(
+            project_id=db_project.id,
+            name=res_name,
+            type=res.get("type", "human"),
+            availability=res.get("availability", 1)
+        )
+        db.add(db_resource)
+        db.flush()
+        resource_map[res_name] = db_resource
+    
+    # Создать задачи
+    task_map = {}
+    for idx, task_data in enumerate(import_data.get("tasks", [])):
+        task_name = task_data.get("name") or f"Task {task_data.get('task_id', idx + 1)}"
+        duration = task_data.get("duration", 60)
+        
+        db_task = models.Task(
+            project_id=db_project.id,
+            name=task_name,
+            duration=duration,
+            status="pending"
+        )
+        db.add(db_task)
+        db.flush()
+        task_map[task_name] = db_task
+    
+    # Добавить зависимости
+    for task_data in import_data.get("tasks", []):
+        task_name = task_data.get("name") or f"Task {task_data.get('task_id', '')}"
+        task = task_map.get(task_name)
+        if not task:
+            continue
+        
+        for dep_name in task_data.get("dependencies", []):
+            dep_task = task_map.get(dep_name)
+            if dep_task:
+                db_dependency = models.Dependency(
+                    task_id=task.id,
+                    depends_on_task_id=dep_task.id
+                )
+                db.add(db_dependency)
+    
+    # Добавить ресурсы к задачам
+    for task_data in import_data.get("tasks", []):
+        task_name = task_data.get("name") or f"Task {task_data.get('task_id', '')}"
+        task = task_map.get(task_name)
+        if not task:
+            continue
+        
+        for res_assign in task_data.get("resources", []):
+            resource = resource_map.get(res_assign.get("resource_name") or res_assign.get("name"))
+            if resource:
+                task.resources.append(resource)
+                db.flush()
+                
+                quantity = res_assign.get("quantity", 1)
+                db.execute(
+                    text("UPDATE task_resource_assignment SET quantity = :q WHERE task_id = :tid AND resource_id = :rid"),
+                    {"q": quantity, "tid": task.id, "rid": resource.id}
+                )
+    
+    db.commit()
+    db.refresh(db_project)
+    
+    trigger_auto_recalc(db_project.id, db)
+    
+    return {"id": db_project.id, "name": db_project.name}
+
 @app.post("/api/projects/{project_id}/resources", response_model=schemas.ResourceResponse)
 def create_resource(
     project_id: int,

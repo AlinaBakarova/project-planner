@@ -34,6 +34,8 @@
         <header class="main-header">
             <h1>Project Planner</h1>
             <div class="user-info">
+                <button id="projects-btn" class="nav-btn active">Проекты</button>
+                <button id="docs-btn" class="nav-btn">Документация</button>
                 <span id="current-user"></span>
                 <button id="logout-btn" class="btn-secondary">Выйти</button>
             </div>
@@ -46,6 +48,8 @@
                 <div class="project-create">
                     <input type="text" id="new-project-name" placeholder="Название проекта">
                     <button id="create-project-btn">Создать</button>
+                    <button id="import-project-btn" class="btn-secondary">Загрузить</button>
+                    <input type="file" id="import-file-input" accept=".json,.csv" style="display: none;">
                 </div>
                 <ul id="projects-list" class="projects-list"></ul>
             </aside>
@@ -141,7 +145,16 @@
                     <div id="plan-tab" class="tab-content">
                         <div class="plan-controls">
                             <button id="calculate-plan-btn">Пересчитать план</button>
-                            <button id="export-plan-btn" class="btn-secondary">Экспорт CSV</button>
+                            
+                            <div class="export-dropdown">
+                                <button id="export-plan-btn" class="btn-secondary">Экспорт плана ▾</button>
+                                <div id="export-menu" class="export-menu hidden">
+                                    <button id="export-csv-btn" class="export-option">CSV</button>
+                                    <button id="export-json-btn" class="export-option">JSON</button>
+                                    <button id="export-pdf-btn" class="export-option">PDF (скриншот)</button>
+                                </div>
+                            </div>
+                            
                             <div id="plan-status" class="plan-status">
                                 <span id="plan-status-text">Статус: нет плана</span>
                             </div>
@@ -151,7 +164,7 @@
                             <p class="no-plan-message">Запустите расчет плана для отображения диаграммы Ганта</p>
                         </div>
                         <div id="conflict-graph-container" class="dependencies-graph-container hidden">
-                            <h3>Конфликт зависимостей</h3>
+                            <h3 style="color: #e74c3c;">⚠️ Конфликт задач</h3>
                             <div id="conflict-graph" class="dependencies-graph"></div>
                         </div>
                     </div>
@@ -160,6 +173,72 @@
             </main>
         </div>
     </div>
+
+    <!-- Страница документации -->
+    <div id="docs-screen" class="screen hidden">
+        <header class="main-header">
+            <h1>Project Planner</h1>
+            <div class="user-info">
+                <button id="docs-projects-btn" class="nav-btn">Проекты</button>
+                <button id="docs-docs-btn" class="nav-btn active">Документация</button>
+                <span id="docs-current-user"></span>
+                <button id="docs-logout-btn" class="btn-secondary">Выйти</button>
+            </div>
+        </header>
+        
+        <div class="docs-content">
+            <h2>Документация</h2>
+            
+            <section class="docs-section">
+                <h3>Обзор</h3>
+                <p>Project Planner — серверный движок интеллектуального планирования задач и ресурсов.</p>
+            </section>
+            
+            <section class="docs-section">
+                <h3>Модель ресурсов</h3>
+                <ul>
+                    <li><strong>Человек (human)</strong> — возобновляемый ресурс. Может работать над задачей, после завершения — освобождается.</li>
+                    <li><strong>Оборудование (machine)</strong> — возобновляемый ресурс. После завершения задачи — освобождается.</li>
+                    <li><strong>Материал (material)</strong> — расходуемый ресурс. Количество уменьшается при использовании. Не восстанавливается.</li>
+                </ul>
+            </section>
+            
+            <section class="docs-section">
+                <h3>Модель задач</h3>
+                <ul>
+                    <li>Задача имеет название и длительность (в минутах).</li>
+                    <li>Задача может зависеть от других задач (precedence constraints).</li>
+                    <li>Задача B не может начаться до завершения задачи A.</li>
+                    <li>Задача может требовать несколько ресурсов с указанием количества.</li>
+                </ul>
+            </section>
+            
+            <section class="docs-section">
+                <h3>Планирование</h3>
+                <ul>
+                    <li>План строится с учётом зависимостей, ресурсов и длительности.</li>
+                    <li>Если план построить невозможно — отображается граф конфликтов.</li>
+                    <li>Пересчёт плана происходит автоматически при изменении задач или ресурсов.</li>
+                </ul>
+            </section>
+            
+            <section class="docs-section">
+                <h3>Ограничения</h3>
+                <ul>
+                    <li>Нельзя удалить ресурс, если он используется в задачах.</li>
+                    <li>Нельзя создать задачу, если запрошено больше ресурса, чем доступно.</li>
+                    <li>При удалении задачи — её зависимости автоматически удаляются.</li>
+                </ul>
+            </section>
+            
+            <section class="docs-section">
+                <h3>Экспорт</h3>
+                <p>План можно экспортировать в CSV-файл.</p>
+            </section>
+        </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
     <script src="app.js"></script>
 </body>
