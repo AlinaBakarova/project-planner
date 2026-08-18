@@ -102,6 +102,7 @@
                             </table>
                         </div>
                     </div>
+                   
                     
                     <!-- Ресурсы -->
                     <div id="resources-tab" class="tab-content">
@@ -140,6 +141,7 @@
                     <div id="plan-tab" class="tab-content">
                         <div class="plan-controls">
                             <button id="calculate-plan-btn">Пересчитать план</button>
+                            <button id="export-plan-btn" class="btn-secondary">Экспорт CSV</button>
                             <div id="plan-status" class="plan-status">
                                 <span id="plan-status-text">Статус: нет плана</span>
                             </div>
@@ -148,7 +150,12 @@
                         <div id="gantt-chart" class="gantt-chart">
                             <p class="no-plan-message">Запустите расчет плана для отображения диаграммы Ганта</p>
                         </div>
+                        <div id="conflict-graph-container" class="dependencies-graph-container hidden">
+                            <h3>Конфликт зависимостей</h3>
+                            <div id="conflict-graph" class="dependencies-graph"></div>
+                        </div>
                     </div>
+                
                 </div>
             </main>
         </div>

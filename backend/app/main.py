@@ -1,16 +1,34 @@
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 import logging
+from logging.handlers import RotatingFileHandler
 import os
+import csv
+import io
 
 from . import models, schemas, auth
 from .database import engine, SessionLocal
 from .planner import run_planning_algorithm
 
 # Logging configuration
-logging.basicConfig(level=logging.INFO)
+LOG_DIR = "/data/logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s - %(name)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        RotatingFileHandler(
+            f"{LOG_DIR}/app.log",
+            maxBytes=10*1024*1024,
+            backupCount=5
+        )
+    ]
+)
 logger = logging.getLogger(__name__)
 
 models.Base.metadata.create_all(bind=engine)
@@ -38,7 +56,6 @@ def trigger_auto_recalc(project_id: int, db: Session):
     """
     Automatically trigger plan recalculation when tasks or resources change.
     """
-    # Проверить, есть ли задачи для планирования
     tasks_count = db.query(models.Task).filter(
         models.Task.project_id == project_id
     ).count()
@@ -47,12 +64,6 @@ def trigger_auto_recalc(project_id: int, db: Session):
         logger.info(f"No tasks for project {project_id}, skipping auto-recalc")
         return None
     
-    # Найти последний план (любой статус)
-    latest_plan = db.query(models.Plan).filter(
-        models.Plan.project_id == project_id
-    ).order_by(models.Plan.created_at.desc()).first()
-    
-    # Создать новый план с pending
     new_plan = models.Plan(
         project_id=project_id,
         status="pending",
@@ -62,7 +73,6 @@ def trigger_auto_recalc(project_id: int, db: Session):
     db.commit()
     db.refresh(new_plan)
     
-    # Запустить Celery задачу
     try:
         from .tasks import calculate_plan_task
         task = calculate_plan_task.delay(new_plan.id)
@@ -75,19 +85,16 @@ def trigger_auto_recalc(project_id: int, db: Session):
 # Auth endpoints
 @app.post("/api/auth/register", response_model=schemas.TokenResponse)
 def register(user: schemas.UserRegister, db: Session = Depends(get_db)):
-    # Check if user exists
     existing_user = db.query(models.User).filter(models.User.username == user.username).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already registered")
     
-    # Create new user
     hashed_password = auth.hash_password(user.password)
     db_user = models.User(username=user.username, password_hash=hashed_password)
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
     
-    # Generate token
     token = auth.create_access_token(
         data={"sub": str(db_user.id), "username": db_user.username}
     )
@@ -96,7 +103,6 @@ def register(user: schemas.UserRegister, db: Session = Depends(get_db)):
 
 @app.post("/api/auth/login", response_model=schemas.TokenResponse)
 def login(user: schemas.UserLogin, db: Session = Depends(get_db)):
-    # Find user
     db_user = db.query(models.User).filter(models.User.username == user.username).first()
     if not db_user or not auth.verify_password(user.password, db_user.password_hash):
         raise HTTPException(
@@ -104,7 +110,6 @@ def login(user: schemas.UserLogin, db: Session = Depends(get_db)):
             detail="Invalid username or password"
         )
     
-    # Generate token
     token = auth.create_access_token(
         data={"sub": str(db_user.id), "username": db_user.username}
     )
@@ -155,7 +160,6 @@ def create_task(
     current_user: dict = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify project ownership
     project = db.query(models.Project).filter(
         models.Project.id == project_id,
         models.Project.user_id == current_user["id"]
@@ -163,14 +167,6 @@ def create_task(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    # Create task
-    db_task = models.Task(
-        project_id=project_id,
-        name=task.name,
-        duration=task.duration,
-        status="pending"
-    )
-
     # Проверить доступность ресурсов
     quantities = task.resource_quantities or {}
     for resource_id in task.resource_ids:
@@ -184,7 +180,6 @@ def create_task(
         quantity = quantities.get(resource_id, 1)
         
         if resource.type == 'material':
-            # Для материалов: проверить остаток
             used = db.execute(
                 text("SELECT COALESCE(SUM(quantity), 0) FROM task_resource_assignment WHERE resource_id = :rid"),
                 {"rid": resource_id}
@@ -196,12 +191,18 @@ def create_task(
                     detail=f"Недостаточно ресурса '{resource.name}': доступно {remaining}, запрошено {quantity}"
                 )
         else:
-            # Для людей/оборудования: проверить общее количество
             if quantity > resource.availability:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Недостаточно ресурса '{resource.name}': доступно {resource.availability}, запрошено {quantity}"
                 )
+    
+    db_task = models.Task(
+        project_id=project_id,
+        name=task.name,
+        duration=task.duration,
+        status="pending"
+    )
     db.add(db_task)
     db.flush()
     
@@ -221,7 +222,6 @@ def create_task(
         db.add(db_dependency)
     
     # Add resources
-    quantities = task.resource_quantities or {}
     for resource_id in task.resource_ids:
         resource = db.query(models.Resource).filter(
             models.Resource.id == resource_id,
@@ -234,7 +234,7 @@ def create_task(
     db.commit()
     db.refresh(db_task)
     
-    # Обновить quantity в association table
+    # Обновить quantity
     for resource_id in task.resource_ids:
         quantity = quantities.get(resource_id, 1)
         db.execute(
@@ -243,7 +243,6 @@ def create_task(
         )
     db.commit()
     
-    # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ СОЗДАНИЯ ЗАДАЧИ
     trigger_auto_recalc(project_id, db)
     
     return {
@@ -275,7 +274,6 @@ def list_tasks(
         dependencies = [d.depends_on_task_id for d in task.dependencies]
         resource_ids = [r.id for r in task.resources]
         
-        # Получить quantity для каждого ресурса
         resource_quantities = {}
         for r in task.resources:
             qty = db.execute(
@@ -302,7 +300,6 @@ def update_task(
     current_user: dict = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Get task with project ownership check
     task = db.query(models.Task).join(models.Project).filter(
         models.Task.id == task_id,
         models.Project.user_id == current_user["id"]
@@ -310,13 +307,11 @@ def update_task(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    # Update basic fields
     if task_update.name is not None:
         task.name = task_update.name
     if task_update.duration is not None:
         task.duration = task_update.duration
     
-    # Update dependencies
     if task_update.dependencies is not None:
         db.query(models.Dependency).filter(models.Dependency.task_id == task_id).delete()
         for dep_id in task_update.dependencies:
@@ -326,7 +321,6 @@ def update_task(
             )
             db.add(db_dependency)
     
-    # Update resources
     if task_update.resource_ids is not None:
         task.resources.clear()
         db.commit()
@@ -351,7 +345,6 @@ def update_task(
     db.commit()
     db.refresh(task)
     
-    # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ ОБНОВЛЕНИЯ ЗАДАЧИ
     trigger_auto_recalc(task.project_id, db)
     
     dependencies = [d.depends_on_task_id for d in task.dependencies]
@@ -379,7 +372,6 @@ def delete_task(
     current_user: dict = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Get task with project_id
     task = db.query(models.Task).join(models.Project).filter(
         models.Task.id == task_id,
         models.Project.user_id == current_user["id"]
@@ -392,7 +384,6 @@ def delete_task(
     db.delete(task)
     db.commit()
     
-    # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ УДАЛЕНИЯ ЗАДАЧИ
     trigger_auto_recalc(project_id, db)
     
     return {"message": "Task deleted successfully"}
@@ -405,7 +396,6 @@ def create_resource(
     current_user: dict = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify project ownership
     project = db.query(models.Project).filter(
         models.Project.id == project_id,
         models.Project.user_id == current_user["id"]
@@ -423,7 +413,6 @@ def create_resource(
     db.commit()
     db.refresh(db_resource)
     
-    # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ СОЗДАНИЯ РЕСУРСА
     trigger_auto_recalc(project_id, db)
     
     return {
@@ -486,7 +475,6 @@ def update_resource(
     db.commit()
     db.refresh(resource)
     
-    # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ ОБНОВЛЕНИЯ РЕСУРСА
     trigger_auto_recalc(resource.project_id, db)
     
     return {
@@ -509,9 +497,6 @@ def delete_resource(
     if not resource:
         raise HTTPException(status_code=404, detail="Resource not found")
     
-   
-
-    from sqlalchemy import text
     tasks_count = db.execute(
         text("SELECT COUNT(*) FROM task_resource_assignment WHERE resource_id = :rid"),
         {"rid": resource_id}
@@ -522,12 +507,12 @@ def delete_resource(
             status_code=400,
             detail=f"Невозможно удалить ресурс: он используется в {tasks_count} задачах"
         )
+    
     project_id = resource.project_id
     
     db.delete(resource)
     db.commit()
     
-    # 🔥 ВЫЗОВ АВТО-ПЕРЕСЧЁТА ПОСЛЕ УДАЛЕНИЯ РЕСУРСА
     trigger_auto_recalc(project_id, db)
     
     return {"message": "Resource deleted successfully"}
@@ -538,7 +523,6 @@ def calculate_plan(
     current_user: dict = Depends(auth.get_current_user),
     db: Session = Depends(get_db)
 ):
-    # Verify project ownership
     project = db.query(models.Project).filter(
         models.Project.id == project_id,
         models.Project.user_id == current_user["id"]
@@ -546,23 +530,19 @@ def calculate_plan(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
-    # Create plan record
     db_plan = models.Plan(project_id=project_id, status="pending")
     db.add(db_plan)
     db.commit()
     db.refresh(db_plan)
     
-    # Trigger Celery task (or run synchronously if Celery not available)
     try:
         from .tasks import calculate_plan_task
         task = calculate_plan_task.delay(db_plan.id)
         logger.info(f"Plan calculation task {task.id} started")
     except Exception as e:
         logger.warning(f"Celery not available: {e}. Running synchronously.")
-        # Fallback: run synchronously
         from .planner import run_planning_algorithm
         
-        # Get tasks and resources
         tasks = db.query(models.Task).filter(models.Task.project_id == project_id).all()
         resources = db.query(models.Resource).filter(models.Resource.project_id == project_id).all()
         
@@ -642,6 +622,49 @@ def get_latest_plan(
         "data": plan.data,
         "created_at": plan.created_at
     }
+
+@app.get("/api/projects/{project_id}/plan/export")
+def export_plan_csv(
+    project_id: int,
+    current_user: dict = Depends(auth.get_current_user),
+    db: Session = Depends(get_db)
+):
+    project = db.query(models.Project).filter(
+        models.Project.id == project_id,
+        models.Project.user_id == current_user["id"]
+    ).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    plan = db.query(models.Plan).filter(
+        models.Plan.project_id == project_id
+    ).order_by(models.Plan.created_at.desc()).first()
+    
+    if not plan or plan.status != "done" or not plan.data:
+        raise HTTPException(status_code=404, detail="No completed plan found")
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Task ID", "Name", "Start (min)", "End (min)", "Duration (min)"])
+    
+    tasks = db.query(models.Task).filter(models.Task.project_id == project_id).all()
+    task_dict = {t.id: t.name for t in tasks}
+    
+    for t in plan.data.get("tasks", []):
+        writer.writerow([
+            t["task_id"],
+            task_dict.get(t["task_id"], "Unknown"),
+            t["start_time"],
+            t["end_time"],
+            t["end_time"] - t["start_time"]
+        ])
+    
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=plan_{project_id}.csv"}
+    )
 
 @app.get("/health")
 def health_check():
